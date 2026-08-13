@@ -1,0 +1,20 @@
+{
+  "name": "linkedin-daily-poster",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personal LinkedIn daily poster — NestJS + Next.js",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @ldp/api --filter @ldp/web dev",
+    "dev:api": "pnpm --filter @ldp/api dev",
+    "dev:web": "pnpm --filter @ldp/web dev",
+    "build": "pnpm -r build",
+    "db:generate": "pnpm --filter @ldp/api prisma:generate",
+    "db:migrate": "pnpm --filter @ldp/api prisma:migrate",
+    "db:seed": "pnpm --filter @ldp/api prisma:seed",
+    "db:studio": "pnpm --filter @ldp/api prisma:studio"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

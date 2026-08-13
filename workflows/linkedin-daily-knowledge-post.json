@@ -1,0 +1,944 @@
+{
+  "name": "LinkedIn Daily Knowledge Post (Approve → Publish)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LinkedIn Daily Knowledge Pipeline\n\n**Voice data is IN this workflow** — node: `Meghan Voice Samples (edit here)`\n\nPaste more Meghan LinkedIn posts into that node's `meghan_voice_samples` field. Founder Voice + Regenerate both read it.\n\n**Flow:**\nCron/Manual → RSS → Research → Rank → Content → Voice Samples → Meghan Voice → Image → Telegram → Publish / Regenerate\n\n**Before activating:**\n1. Connect OpenAI, Telegram, LinkedIn credentials (⚠️ nodes)\n2. Set Telegram Chat ID\n3. Test with Manual Trigger first",
+        "height": 340,
+        "width": 460,
+        "color": 5
+      },
+      "id": "sticky-overview",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-7am",
+      "name": "Cron Every Morning 7:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Test Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://techcrunch.com/feed/",
+        "options": {}
+      },
+      "id": "rss-techcrunch",
+      "name": "RSS TechCrunch",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        280,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.theverge.com/rss/index.xml",
+        "options": {}
+      },
+      "id": "rss-verge",
+      "name": "RSS The Verge",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        280,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://hnrss.org/frontpage",
+        "options": {}
+      },
+      "id": "rss-hn",
+      "name": "RSS Hacker News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        280,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.wired.com/feed/rss",
+        "options": {}
+      },
+      "id": "rss-wired",
+      "name": "RSS Wired",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        280,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4
+      },
+      "id": "merge-rss",
+      "name": "Merge News Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        540,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst seen = new Set();\nconst stories = [];\n\nfor (const item of items) {\n  const j = item.json;\n  const title = (j.title || '').trim();\n  const link = (j.link || j.guid || '').trim();\n  const key = (link || title).toLowerCase();\n  if (!title || !key || seen.has(key)) continue;\n  seen.add(key);\n  stories.push({\n    title,\n    link,\n    summary: (j.contentSnippet || j.content || j.description || '').toString().slice(0, 500),\n    published: j.pubDate || j.isoDate || null,\n    source: j.creator || j.author || (link ? new URL(link).hostname.replace('www.', '') : 'unknown')\n  });\n}\n\nreturn [{\n  json: {\n    collected_at: new Date().toISOString(),\n    story_count: stories.length,\n    stories: stories.slice(0, 40)\n  }\n}];"
+      },
+      "id": "normalize-news",
+      "name": "Normalize & Dedupe Stories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a senior technology research analyst for Meghan Vaze, Founder & CEO of Unovative (digital product design & development agency; product consulting; SaaS / hybrid apps; building with Indian & Vietnamese tech startups).\n\nSelect the TOP 10 stories most useful for Meghan's LinkedIn audience: founders, startup operators, product builders, agency owners, and people turning ideas into digital products.\n\nPrioritize topics Meghan can speak on with authority:\n- Product building, SaaS, mobile/hybrid apps, UX, e-commerce\n- Startup execution (ideation → design → develop → ship)\n- AI applied to real products/ops (not hype-only)\n- India / SE Asia / global remote delivery & client work\n- Founder lessons, talent, shipping speed, client collaboration\n- Durable insight over fundraising gossip\n\nAvoid: celebrity drama, pure crypto speculation, clickbait with no builder lesson.\n\nReturn ONLY valid JSON (no markdown fences):\n{\n  \"top_stories\": [\n    {\n      \"rank\": 1,\n      \"title\": \"string\",\n      \"link\": \"string\",\n      \"why_it_matters\": \"1-2 sentences for Meghan's audience\",\n      \"trend_score\": 1-10,\n      \"angle\": \"Meghan/Unovative-relevant founder angle\"\n    }\n  ]\n}"
+            },
+            {
+              "content": "Collected at: {{ $json.collected_at }}\nStory count: {{ $json.story_count }}\n\nStories JSON:\n{{ JSON.stringify($json.stories) }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "research-agent",
+      "name": "⚠️ Research Agent (Top 10)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1000,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You rank stories for Meghan Vaze (Founder & CEO, Unovative) LinkedIn posts.\n\nPick ONE winning story from top_stories that Meghan can turn into a knowledgeable, personal founder post TODAY.\n\nScore using:\n1. Fit with Unovative world: product, apps, SaaS, design/dev, client delivery, startup building\n2. Can Meghan connect it to real builder experience (shipping products, working with founders, India/Vietnam tech)?\n3. Timeliness / conversation potential on LinkedIn\n4. Depth of insight possible (not just 'X raised $Y')\n5. Emotional honesty + practical takeaway (journey + execution)\n\nReturn ONLY valid JSON (no markdown fences):\n{\n  \"winner\": {\n    \"title\": \"string\",\n    \"link\": \"string\",\n    \"why_it_matters\": \"string\",\n    \"trend_score\": 1-10,\n    \"angle\": \"string\",\n    \"prediction_reason\": \"why this wins for Meghan today\"\n  },\n  \"runners_up\": [{\"title\": \"string\", \"reason_skipped\": \"string\"}]\n}"
+            },
+            {
+              "content": "Top stories from research agent:\n{{ $json.message?.content || $json.text || JSON.stringify($json) }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "ranking-agent",
+      "name": "⚠️ Ranking Agent (Pick 1)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1240,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You write LinkedIn draft angles for Meghan Vaze, Founder & CEO of Unovative.\n\nWrite THREE high-knowledge drafts for the winning story. Each should sound like a real product founder/builder — not a news rewriter or agency brochure.\n\nDraft styles:\n1. operator_playbook — how builders/product teams should act on this\n2. journey_lesson — personal builder journey framing (idea → reality, shipping, hard choices)\n3. product_insight — product/SaaS/app/UX angle tied to client or startup building\n\nRules for every draft:\n- Sharp hook in first line\n- Teach something specific (tradeoff, shipping lesson, product principle)\n- Short paragraphs, LinkedIn-native formatting\n- Conversational founder English (clear, human; not stiff corporate)\n- Light emoji OK only if natural (0–2 max)\n- Max 3 hashtags at end\n- 180–280 words\n- End with a question or clear takeaway\n- Do NOT fake specific Unovative client names/metrics unless given\n- Never use: synergy, disrupt, game-changer, thrilled to announce, in today's fast-paced world\n\nIf regeneration_feedback is provided, incorporate it.\n\nReturn ONLY valid JSON (no markdown fences):\n{\n  \"drafts\": [\n    {\"style\": \"operator_playbook\", \"post_text\": \"...\", \"hook\": \"...\"},\n    {\"style\": \"journey_lesson\", \"post_text\": \"...\", \"hook\": \"...\"},\n    {\"style\": \"product_insight\", \"post_text\": \"...\", \"hook\": \"...\"}\n  ],\n  \"image_prompt\": \"clean professional LinkedIn visual for the topic, no text clutter\",\n  \"suggested_hashtags\": [\"#tag1\", \"#tag2\", \"#tag3\"]\n}"
+            },
+            {
+              "content": "Winning story / ranking output:\n{{ $json.message?.content || $json.text || JSON.stringify($json) }}\n\nRegeneration feedback (may be empty):\n{{ $('Parse Approval Response').isExecuted ? ($('Parse Approval Response').first().json.feedback || '') : ($json.feedback || '') }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "content-agent",
+      "name": "⚠️ Content Agent (3 Drafts)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1480,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "voice-bank",
+              "name": "meghan_voice_samples",
+              "value": "# Meghan Vaze — Real LinkedIn Writing Samples\n\nThese are real posts used as few-shot \"voice data\" for the n8n Founder Voice Agent.\nAdd more posts here over time (paste full text). Aim for 5–10 strong examples.\n\nIMPORTANT: Models mimic *style*, not audio. More real writing samples = better mimicry.\n\n---\n\n## Sample 1 — Product psychology / UX\n\nThe Physiology of User Stress Inside Apps\n\nWe talk about bad UX all the time, but nobody talks about what it does to the human body.\n\nYes, your product can trigger real stress responses without the user ever noticing it consciously.\n\n- Tiny delays\n- Crowded screens\n- Sudden layout jumps\n- Unclear next steps\n\nThese do not just confuse people. They activate the body’s stress system.\n\nA small loading pause increases cortisol.\nDense layouts increase visual tension.\nUnpredictable UI elements break the brain’s sense of safety.\n\nUsers won’t say it in feedback.\nThey will simply feel uncomfortable and leave.\n\nThis is why the most successful products feel calm.\nThey give breathing space.\nThey respond instantly.\nThey follow clear patterns.\nThey reduce mental noise.\nThey feel predictable.\n\nGreat UX is not just design. It is physiology.\n\nWhen your product reduces stress, the user’s brain shifts from defensive mode to exploration mode.\nThat is when retention improves.\nThat is when trust builds.\nThat is when users stay longer without even realising why.\n\nDesign for the body, not just the screen.\nThe results will show in your engagement charts.\n\n---\n\n## Sample 2 — Product communication\n\nBottleneck in Product Isn’t Tech - It’s Communication\n\nEvery product team loves to say delays happen because of tech.\nLegacy systems. Complex integrations. Unplanned bugs.\n\nBut after working across multiple teams and products, I’ve seen a pattern.\nMost product delays have nothing to do with technology.\nThey come from unclear communication.\n\nLet me give you a simple example.\n\nA developer once asked for clarity on a feature I had described as “Add a quick filter for faster user search.”\n\nI assumed everyone knew what it meant.\nThey didn’t.\n\nHalf the team thought it was a backend change.\nOthers believed it was a UI component.\nQA expected two specific use cases.\nDesign expected none.\n\nOne five-minute conversation solved what eventually cost two days of back-and-forth.\n\nThis is the silent tax every product team pays when communication isn’t crisp.\n\nWhat actually slows teams down:\n• Vague acceptance criteria\n• Assumptions about user behavior\n• Unspoken constraints\n• Missing edge cases\n• Stakeholders aligned… but in different directions\n• Teams “understanding” the feature differently\n\nWhen clarity is missing, people fill the gaps with their own interpretations.\nThat’s where delays multiply.\n\nWhat I learned over time:\nClear communication isn’t about more meetings.\nIt’s about better articulation.\n\nHere’s the formula I use before handing anything to a team:\n1. What are we building?\n2. Why are we building it?\n3. What does success look like?\n4. What are the constraints?\n\nWhen these four pieces are defined, development becomes predictable.\nQA becomes faster.\nDesign becomes aligned.\nAnd the roadmap stops becoming a guessing game.\n\nThe real bottleneck in product isn’t code, tools, or velocity.\nIt’s the misunderstandings hiding inside conversations everyone thought were clear.\n\nIf you can fix communication, you can fix almost everything else in product.\n\n---\n\n## Sample 3 — Brain load / retention\n\nBrain Load Theory: Why Every Extra Step Cuts Retention\n\nProduct teams often look at drop-offs as a motivation problem.\nIn reality, most drop offs are a biology problem.\n\nThe human brain has a limited capacity for effort in any single session.\nEvery tap, decision, scroll, or confirmation consumes a small amount of mental energy.\n\nIndividually, these steps feel harmless.\nCollectively, they exhaust the user.\n\nThis is what Brain Load Theory explains.\n\nMental Energy Is Not Infinite\n\nWhen a user opens an app, they do not arrive fully focused.\nThey are switching contexts from real life.\nThe brain starts in a low engagement state and warms up gradually.\n\nEach additional step taxes working memory and attention.\nAdd one unnecessary screen and the brain asks, “Is this worth it?”\nAdd another and the answer quietly becomes “not now.”\n\nNo feedback is given.\nThe app is simply closed.\n\nWhy Extra Steps Feel Heavier Than They Look\n\nFrom a product team’s view, adding one more confirmation screen or filter feels minor.\nFor users, it means:\n• Another decision\n• Another moment of uncertainty\n• Another delay before progress\n\nThis activates friction, not logic.\nThe brain is wired to conserve energy, not complete flows.\nThat is why simple apps often outperform powerful ones.\n\nWhere Most Products Accidentally Increase Brain Load\n• Long onboarding before value is felt\n• Multi step sign ups\n• Repeated confirmations\n• Over explanation instead of guidance\n• Asking users to think when they just want to act\n\nEach of these silently reduces retention.\n\nHow i fix this\nAudit flows by counting decisions, not screens,\nRemove steps that do not create immediate user value,\nMerge actions wherever possible,\nDelay complexity until after the core task is complete.\n\nMost importantly, design flows that respect mental stamina, not just feature completeness.\n\nThe Core Insight\nUsers do not leave because your product is hard,\nThey leave because it feels mentally expensive.\n\nReduce the cost.\nRetention will follow.\n\n---\n\n## Sample 4 — Personal journey\n\n🎥 “My first ever step into the tech world wasn’t a degree… it was a YouTube channel.”\n\nI was in 1st year of my diploma when I started my small tech YouTube channel.\nI didn’t know what “career”, “product”, or “startup” really meant…\nI just knew one thing — I wanted to create.\n\nBack then, I used to record basic tech videos, edit late at night, learn thumbnails, fix clickbait titles, experiment with small storytelling… and slowly, I started understanding myself.\n\nAnd then one day, I realized:\nYouTube wasn’t for me — but the skills I learned WERE exactly what I needed.\n\n- Editing\n- Overcoming camera fear\n- Content creation\n- Storytelling\n- Understanding audiences\n\nAll these skills became the foundation for everything that came next.\n\nFrom YouTube → to Startup → to Product Life\n\nWhen I left YouTube, many people thought I “gave up”.\nBut honestly… that decision shaped my entire journey.\n\nI started my first startup.\nI made mistakes.\nI learned how real business feels.\nI understood mindset, team communication, process, discipline, and resilience.\n\nIf you’ve been following me here, you already know the rest of my journey — the product roles, startup building, POD, Unovative, ideation, execution, and everything I'm moving towards today.\n\nMy intention behind sharing this story is simple:\nIt’s NEVER a wrong decision… if the step you took was a POSITIVE action.\n\nEvery attempt builds you.\nEvery experiment teaches you.\nEvery failure prepares you.\nEvery pivot grows you.\n\nStartup life teaches you three things very quickly:\n🔥 Mindset — how you think changes who you become.\n🔥 Communication — you learn to express, negotiate, and lead.\n🔥 Reality check — you face the real version of yourself, not the imagination.\n\n---\n\n## Style patterns to copy\n- Title/hook first line that reframes a common belief\n- Short punchy sentences + line breaks\n- Bullet lists with • or -\n- Personal proof: “I’ve seen…”, “How I fix this”, small real anecdote\n- Numbered formulas/frameworks\n- Ends on a sharp one-liner takeaway\n- Product + human psychology angle when relevant\n- Honest journey tone when personal\n- Light emoji only when natural (often none in product posts)",
+              "type": "string"
+            },
+            {
+              "id": "voice-name",
+              "name": "founder_name",
+              "value": "Meghan Vaze",
+              "type": "string"
+            },
+            {
+              "id": "company",
+              "name": "company",
+              "value": "Unovative",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "includeOtherFields": true
+        }
+      },
+      "id": "meghan-voice-bank",
+      "name": "Meghan Voice Samples (edit here)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1600,
+        400
+      ],
+      "notes": "Paste more of Meghan's real LinkedIn posts into meghan_voice_samples. Founder Voice Agent reads this field."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are the Founder Voice Agent for Meghan Vaze (Founder & CEO, Unovative).\n\nRewrite the BEST of the three drafts into ONE final LinkedIn post that sounds like Meghan wrote it himself.\n\nCRITICAL: Mimic the REAL writing samples provided in meghan_voice_samples (rhythm, sentence length, structure, punctuation). Do NOT copy their topics verbatim. Do NOT invent fake personal stories.\n\nWHO MEGHAN IS:\n- Founder & CEO of Unovative — turns ideas into reality via digital design & development\n- Product consultant: hybrid apps, SaaS, ecommerce, Indian & Vietnamese tech startups\n- Builder journey: diploma → YouTube → early startups → product work → Unovative\n- Mumbai / India based; ships with clients and product teams\n\nCOPY THESE PATTERNS FROM THE SAMPLES:\n- Hook/title that reframes a common belief\n- Short sentences + frequent line breaks\n- Bullet lists with • or -\n- “I’ve seen…”, small real anecdote, or “How I fix this”\n- Numbered frameworks when useful\n- Sharp closing one-liner\n- Product + human/psychology angle when natural\n- Journey tone only when the topic fits\n\nHARD AVOIDS:\n- Corporate fluff / brochure tone / news rewrite\n- Invented Unovative metrics or fake client stories\n- “Thrilled to announce”, “I’m excited to share”, “fast-paced world”\n- Buzzwords: synergy, disrupt, game-changer, revolutionary\n\nSelect the strongest draft, rewrite fully in Meghan’s voice.\nTarget 180–280 words. LinkedIn formatting.\n\nReturn ONLY valid JSON (no markdown fences):\n{\n  \"chosen_style\": \"operator_playbook|journey_lesson|product_insight\",\n  \"post_text\": \"final linkedin post\",\n  \"hook\": \"first line\",\n  \"image_prompt\": \"refined image prompt\",\n  \"hashtags\": [\"#a\", \"#b\", \"#c\"],\n  \"source_title\": \"original story title\",\n  \"source_link\": \"url\"\n}"
+            },
+            {
+              "content": "===== MEGHAN REAL VOICE SAMPLES (few-shot) =====\n{{ $('Meghan Voice Samples (edit here)').first().json.meghan_voice_samples }}\n===== END SAMPLES =====\n\nContent agent drafts:\n{{ $json.message?.content || $json.text || JSON.stringify($json) }}\n\nRanking context (for source title/link):\n{{ $('⚠️ Ranking Agent (Pick 1)').first().json.message?.content || $('⚠️ Ranking Agent (Pick 1)').first().json.text || '' }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.55
+        }
+      },
+      "id": "founder-voice-agent",
+      "name": "⚠️ Founder Voice: Meghan Vaze",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1720,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractJson(text) {\n  if (!text) throw new Error('Empty AI response');\n  if (typeof text === 'object') return text;\n  const cleaned = String(text).replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/```$/i, '').trim();\n  try { return JSON.parse(cleaned); } catch (e) {}\n  const start = cleaned.indexOf('{');\n  const end = cleaned.lastIndexOf('}');\n  if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));\n  throw new Error('Could not parse JSON from AI response: ' + cleaned.slice(0, 200));\n}\n\nconst raw = $input.first().json;\nconst content = raw.message?.content || raw.text || raw;\nconst parsed = extractJson(content);\n\nconst postText = (parsed.post_text || '').trim();\nif (!postText) throw new Error('Founder Voice Agent did not return post_text');\n\nconst hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.join(' ') : '';\nconst fullPost = hashtags && !postText.includes('#') ? `${postText}\\n\\n${hashtags}` : postText;\n\nreturn [{\n  json: {\n    chosen_style: parsed.chosen_style || '',\n    post_text: fullPost,\n    hook: parsed.hook || fullPost.split('\\n')[0],\n    image_prompt: parsed.image_prompt || 'Minimal professional abstract technology concept, clean LinkedIn aesthetic, no text',\n    hashtags: parsed.hashtags || [],\n    source_title: parsed.source_title || '',\n    source_link: parsed.source_link || '',\n    generated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-final-post",
+      "name": "Parse Final Post JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "prompt": "={{ $json.image_prompt }}. Style: clean editorial LinkedIn graphic, professional, high contrast, minimal, no logos, no watermarks, no readable text in the image.",
+        "options": {
+          "size": "1024x1024",
+          "quality": "standard",
+          "style": "natural"
+        }
+      },
+      "id": "image-agent",
+      "name": "⚠️ Image Agent (DALL·E)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const draft = $('Parse Final Post JSON').first().json;\nconst imageItem = $input.first().json;\n\n// OpenAI image node may return url or binary depending on version/settings\nconst imageUrl = imageItem.url || imageItem.data?.[0]?.url || imageItem.message?.content || null;\n\nreturn [{\n  json: {\n    ...draft,\n    image_url: imageUrl,\n    approval_message: [\n      '🧠 *Meghan Vaze / Unovative — LinkedIn draft ready*',\n      '',\n      `*Hook:* ${draft.hook}`,\n      `*Style:* ${draft.chosen_style}`,\n      draft.source_title ? `*Source:* ${draft.source_title}` : null,\n      draft.source_link ? draft.source_link : null,\n      '',\n      '---- POST ----',\n      draft.post_text,\n      '--------------',\n      '',\n      imageUrl ? `Image: ${imageUrl}` : 'Image: (check binary/attachment in n8n)',\n      '',\n      'Approve to publish, or Reject to regenerate.'\n    ].filter(Boolean).join('\\n')\n  },\n  binary: $input.first().binary || undefined\n}];"
+      },
+      "id": "prepare-approval",
+      "name": "Prepare Approval Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Drafts",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "generated_at": "={{ $json.generated_at }}",
+            "hook": "={{ $json.hook }}",
+            "style": "={{ $json.chosen_style }}",
+            "post_text": "={{ $json.post_text }}",
+            "source_title": "={{ $json.source_title }}",
+            "source_link": "={{ $json.source_link }}",
+            "image_url": "={{ $json.image_url }}",
+            "status": "pending_approval"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-draft",
+      "name": "⚠️ Log Draft (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2680,
+        240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets"
+        }
+      },
+      "disabled": true,
+      "notes": "Optional. Enable after creating a Sheet named Drafts with headers: generated_at, hook, style, post_text, source_title, source_link, image_url, status"
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "REPLACE_TELEGRAM_CHAT_ID",
+        "message": "={{ $json.approval_message }}",
+        "responseType": "approval",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Approve & Publish",
+            "disapproveLabel": "Reject & Regenerate"
+          }
+        },
+        "options": {
+          "limitWaitTime": {
+            "values": {
+              "limitType": "afterTimeInterval",
+              "resumeAmount": 24,
+              "resumeUnit": "hours"
+            }
+          }
+        }
+      },
+      "id": "telegram-approval",
+      "name": "⚠️ Telegram Approval",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2680,
+        400
+      ],
+      "webhookId": "linkedin-approval-wait",
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const approval = $input.first().json;\nconst draft = $('Prepare Approval Payload').first().json;\n\n// n8n Send-and-Wait approval usually exposes data.approved boolean\nconst approved = Boolean(\n  approval?.data?.approved ??\n  approval?.approved ??\n  (String(approval?.data?.action || approval?.action || '').toLowerCase().includes('approve'))\n);\n\nconst feedback = approval?.data?.text || approval?.text || approval?.data?.message || '';\n\nreturn [{\n  json: {\n    approved,\n    feedback,\n    post_text: draft.post_text,\n    hook: draft.hook,\n    image_url: draft.image_url,\n    source_title: draft.source_title,\n    source_link: draft.source_link,\n    chosen_style: draft.chosen_style,\n    generated_at: draft.generated_at\n  },\n  binary: $('Prepare Approval Payload').first().binary || undefined\n}];"
+      },
+      "id": "parse-approval",
+      "name": "Parse Approval Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2920,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "approved-true",
+              "leftValue": "={{ $json.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-approved",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3160,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "text": "={{ $('Parse Approval Response').first().json.post_text }}",
+        "additionalFields": {}
+      },
+      "id": "linkedin-publish",
+      "name": "⚠️ Publish to LinkedIn",
+      "type": "n8n-nodes-base.linkedIn",
+      "typeVersion": 1,
+      "position": [
+        3420,
+        280
+      ],
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "REPLACE_LINKEDIN_CREDENTIAL_ID",
+          "name": "LinkedIn"
+        }
+      },
+      "notes": "Personal profile posting: disable Organization Support on the LinkedIn credential. Enable 'Share on LinkedIn' product in your LinkedIn Developer app."
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_TELEGRAM_CHAT_ID",
+        "text": "✅ Published to LinkedIn.\\n\\nHook: {{ $('Parse Approval Response').first().json.hook }}\\n\\n{{ $('Parse Approval Response').first().json.source_link || '' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "telegram-published",
+      "name": "Telegram: Published",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3660,
+        280
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_TELEGRAM_CHAT_ID",
+        "text": "♻️ Rejected. Regenerating a new founder-voice draft with your feedback...\\n\\nFeedback: {{ $json.feedback || 'none — trying a different angle' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "telegram-regenerate",
+      "name": "Telegram: Regenerating",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3420,
+        560
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are regenerating a LinkedIn post for Meghan Vaze (Founder & CEO, Unovative) after human rejection.\n\nProduce a meaningfully different draft that addresses the feedback, still mimicking Meghan's real writing style:\n- Short punchy sentences + line breaks\n- Hook that reframes a belief\n- Bullets / numbered frameworks when useful\n- “I’ve seen” / practical fix / sharp closer\n- Product + human psychology angle when natural\n- No corporate fluff, no fake Unovative metrics\n- 180–280 words, max 3 hashtags\n\nReturn ONLY valid JSON (no markdown fences):\n{\n  \"chosen_style\": \"regenerated\",\n  \"post_text\": \"...\",\n  \"hook\": \"...\",\n  \"image_prompt\": \"...\",\n  \"hashtags\": [\"#a\", \"#b\", \"#c\"],\n  \"source_title\": \"...\",\n  \"source_link\": \"...\"\n}"
+            },
+            {
+              "content": "===== MEGHAN REAL VOICE SAMPLES (few-shot) =====\n{{ $('Meghan Voice Samples (edit here)').first().json.meghan_voice_samples }}\n===== END SAMPLES =====\n\nPrevious post:\n{{ $('Parse Approval Response').first().json.post_text }}\n\nFeedback:\n{{ $('Parse Approval Response').first().json.feedback || 'Make it sharper, more specific, less generic.' }}\n\nOriginal ranking/story context:\n{{ $('⚠️ Ranking Agent (Pick 1)').first().json.message?.content || $('⚠️ Ranking Agent (Pick 1)').first().json.text || '' }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.8
+        }
+      },
+      "id": "regenerate-agent",
+      "name": "⚠️ Regenerate Post Agent",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        3660,
+        560
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractJson(text) {\n  if (!text) throw new Error('Empty AI response');\n  if (typeof text === 'object') return text;\n  const cleaned = String(text).replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/```$/i, '').trim();\n  try { return JSON.parse(cleaned); } catch (e) {}\n  const start = cleaned.indexOf('{');\n  const end = cleaned.lastIndexOf('}');\n  if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));\n  throw new Error('Could not parse JSON from regenerate response');\n}\n\nconst raw = $input.first().json;\nconst content = raw.message?.content || raw.text || raw;\nconst parsed = extractJson(content);\nconst postText = (parsed.post_text || '').trim();\nconst hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.join(' ') : '';\nconst fullPost = hashtags && !postText.includes('#') ? `${postText}\\n\\n${hashtags}` : postText;\n\nreturn [{\n  json: {\n    chosen_style: parsed.chosen_style || 'regenerated',\n    post_text: fullPost,\n    hook: parsed.hook || fullPost.split('\\n')[0],\n    image_prompt: parsed.image_prompt || $('Prepare Approval Payload').first().json.image_prompt,\n    hashtags: parsed.hashtags || [],\n    source_title: parsed.source_title || $('Prepare Approval Payload').first().json.source_title,\n    source_link: parsed.source_link || $('Prepare Approval Payload').first().json.source_link,\n    generated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-regenerated",
+      "name": "Parse Regenerated Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3900,
+        560
+      ]
+    }
+  ],
+  "connections": {
+    "Cron Every Morning 7:00": {
+      "main": [
+        [
+          {
+            "node": "RSS TechCrunch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS The Verge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Hacker News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Wired",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test Trigger": {
+      "main": [
+        [
+          {
+            "node": "RSS TechCrunch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS The Verge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Hacker News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Wired",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS TechCrunch": {
+      "main": [
+        [
+          {
+            "node": "Merge News Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS The Verge": {
+      "main": [
+        [
+          {
+            "node": "Merge News Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "RSS Hacker News": {
+      "main": [
+        [
+          {
+            "node": "Merge News Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "RSS Wired": {
+      "main": [
+        [
+          {
+            "node": "Merge News Sources",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge News Sources": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Dedupe Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Dedupe Stories": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Research Agent (Top 10)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Research Agent (Top 10)": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Ranking Agent (Pick 1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Ranking Agent (Pick 1)": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Content Agent (3 Drafts)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Content Agent (3 Drafts)": {
+      "main": [
+        [
+          {
+            "node": "Meghan Voice Samples (edit here)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Founder Voice: Meghan Vaze": {
+      "main": [
+        [
+          {
+            "node": "Parse Final Post JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Final Post JSON": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Image Agent (DALL·E)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Image Agent (DALL·E)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Approval Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Approval Payload": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Log Draft (Google Sheets)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "⚠️ Telegram Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Telegram Approval": {
+      "main": [
+        [
+          {
+            "node": "Parse Approval Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Approval Response": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Publish to LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram: Regenerating",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Publish to LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram: Regenerating": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Regenerate Post Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Regenerate Post Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Regenerated Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Regenerated Post": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Image Agent (DALL·E)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Meghan Voice Samples (edit here)": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Founder Voice: Meghan Vaze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Daily tech research → ranked founder LinkedIn post → image → Telegram approval → publish or regenerate"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "linkedin"
+    },
+    {
+      "name": "content"
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  linkedinConnection LinkedInConnection?
+  settings           Settings?
+
+  @@map("users")
+}
+
+model LinkedInConnection {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @map("user_id") @db.Uuid
+  accessToken  String   @map("access_token")
+  refreshToken String?  @map("refresh_token")
+  expiresAt    DateTime? @map("expires_at")
+  personUrn    String   @map("person_urn")
+  connectedAt  DateTime @default(now()) @map("connected_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("linkedin_connections")
+}
+
+model VoiceSample {
+  id        String   @id @default(uuid()) @db.Uuid
+  title     String
+  body      String
+  sourceUrl String?  @map("source_url")
+  source    String   @default("manual") // manual | linkedin_export | published_by_app | seed
+  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("voice_samples")
+}
+
+model NewsSource {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  rssUrl    String   @map("rss_url")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("news_sources")
+}
+
+model Run {
+  id              String    @id @default(uuid()) @db.Uuid
+  triggeredBy     String    @map("triggered_by") // cron | manual
+  status          String
+  collectedAt     DateTime? @map("collected_at")
+  storyCount      Int?      @map("story_count")
+  winnerJson      Json?     @map("winner_json")
+  topStoriesJson  Json?     @map("top_stories_json")
+  errorMessage    String?   @map("error_message")
+  publishedAt     DateTime? @map("published_at")
+  linkedinPostUrn String?   @map("linkedin_post_urn")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  drafts Draft[]
+  logs   PipelineLog[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("runs")
+}
+
+model Draft {
+  id              String   @id @default(uuid()) @db.Uuid
+  runId           String   @map("run_id") @db.Uuid
+  version         Int      @default(1)
+  chosenStyle     String?  @map("chosen_style")
+  hook            String?
+  postText        String?  @map("post_text")
+  imagePrompt     String?  @map("image_prompt")
+  imageUrl        String?  @map("image_url")
+  hashtags        String[] @default([])
+  sourceTitle     String?  @map("source_title")
+  sourceLink      String?  @map("source_link")
+  threeDraftsJson Json?    @map("three_drafts_json")
+  status          String   @default("pending")
+  feedback        String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, version])
+  @@index([runId, status])
+  @@map("drafts")
+}
+
+model PipelineLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  runId        String   @map("run_id") @db.Uuid
+  step         String
+  inputExcerpt String?  @map("input_excerpt")
+  outputJson   Json?    @map("output_json")
+  latencyMs    Int?     @map("latency_ms")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@map("pipeline_logs")
+}
+
+model Settings {
+  id               String  @id @default(uuid()) @db.Uuid
+  userId           String  @unique @map("user_id") @db.Uuid
+  timezone         String  @default("Asia/Kolkata")
+  cronEnabled      Boolean @default(true) @map("cron_enabled")
+  telegramChatId   String? @map("telegram_chat_id")
+  telegramEnabled  Boolean @default(false) @map("telegram_enabled")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("settings")
+}
