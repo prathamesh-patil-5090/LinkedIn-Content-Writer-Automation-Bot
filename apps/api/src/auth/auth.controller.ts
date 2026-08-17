@@ -14,6 +14,7 @@ import * as bcrypt from 'bcrypt';
 import type { Request, Response } from 'express';
 import { PrismaService } from '../prisma/prisma.module';
 import { CurrentUser, SessionAuthGuard, SessionUser } from './session.guard';
+import { sessionCookieOpts } from './cookie';
 
 class LoginDto {
   @IsEmail()
@@ -62,12 +63,7 @@ export class AuthController {
     await new Promise<void>((resolve, reject) => {
       req.session.destroy((err) => (err ? reject(err) : resolve()));
     });
-    res.clearCookie('ldp.sid', {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-    });
+    res.clearCookie('ldp.sid', sessionCookieOpts());
     return { ok: true };
   }
 

@@ -4,6 +4,7 @@ dist
 .turbo
 .env
 .env.local
+.env.prod
 !.env.example
 apps/web/.env.local
 uploads
