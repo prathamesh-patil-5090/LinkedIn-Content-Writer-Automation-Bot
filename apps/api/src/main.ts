@@ -49,9 +49,9 @@ async function bootstrap() {
     }),
   );
 
-  const port = Number(process.env.API_PORT || process.env.PORT || 3001);
+  const port = Number(process.env.PORT || process.env.API_PORT || 3001);
   await app.listen(port);
-  console.log(`API listening on http://localhost:${port}/api/v1`);
+  console.log(`API listening on :${port}/api/v1`);
 }
 
 bootstrap();
