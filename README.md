@@ -82,11 +82,9 @@ Set `TZ=Asia/Kolkata` on the Render **API** service. Keep a single API instance 
 
 Optional: `POST /api/v1/cron/tick` with `Authorization: Bearer <CRON_SECRET>` (add `?force=1` to ignore the window).
 
-## Render
+## Render (API) + Vercel (web)
 
-Two **Web** services, root directory = repo root. Node `20.x` (from `package.json` engines). Do not use `pnpm run dev:api` in production.
-
-**API service**
+**API** — Render Web service, root = repo root. Node `20.x`. Do not use `pnpm run dev:api`.
 
 ```
 Build:  pnpm install --frozen-lockfile --prod=false && pnpm run build:api
@@ -96,11 +94,6 @@ Health: /api/v1/health/live
 
 `--prod=false` is required: Render sets `NODE_ENV=production`, which would skip Nest CLI / TypeScript and break the build.
 
-**Web service**
+Set on Render: `APP_URL=https://linked-in-content-writer-automation.vercel.app` (no trailing slash), `COOKIE_SAMESITE=none`, `LINKEDIN_REDIRECT_URI=https://linkedin-content-writer-automation-bot.onrender.com/api/v1/linkedin/oauth/callback`.
 
-```
-Build:  pnpm install --frozen-lockfile --prod=false && pnpm run build:web
-Start:  pnpm run start:web
-```
-
-Set `NEXT_PUBLIC_API_URL` before the first web build.
+**Web** — Vercel, root directory `apps/web`. Set `NEXT_PUBLIC_API_URL=https://linkedin-content-writer-automation-bot.onrender.com/api/v1` and **redeploy** (it is baked in at build).
