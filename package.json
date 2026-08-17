@@ -9,12 +9,16 @@
     "dev:api": "pnpm --filter @ldp/api dev",
     "dev:web": "pnpm --filter @ldp/web dev",
     "build": "pnpm -r build",
+    "build:api": "pnpm --filter @ldp/shared build && pnpm --filter @ldp/api prisma:generate && pnpm --filter @ldp/api build",
+    "build:web": "pnpm --filter @ldp/shared build && pnpm --filter @ldp/web build",
+    "start:api": "pnpm --filter @ldp/api prisma:migrate && pnpm --filter @ldp/api start:prod",
+    "start:web": "pnpm --filter @ldp/web start",
     "db:generate": "pnpm --filter @ldp/api prisma:generate",
     "db:migrate": "pnpm --filter @ldp/api prisma:migrate",
     "db:seed": "pnpm --filter @ldp/api prisma:seed",
     "db:studio": "pnpm --filter @ldp/api prisma:studio"
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   }
 }

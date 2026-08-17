@@ -81,3 +81,26 @@ Slots: 07, 09, 11, 13, 15, 17, 19, 21, 23, 00 `Asia/Kolkata`. Each cron run gene
 Set `TZ=Asia/Kolkata` on the Render **API** service. Keep a single API instance so two processes cannot double-post.
 
 Optional: `POST /api/v1/cron/tick` with `Authorization: Bearer <CRON_SECRET>` (add `?force=1` to ignore the window).
+
+## Render
+
+Two **Web** services, root directory = repo root. Node `20.x` (from `package.json` engines). Do not use `pnpm run dev:api` in production.
+
+**API service**
+
+```
+Build:  pnpm install --frozen-lockfile --prod=false && pnpm run build:api
+Start:  pnpm run start:api
+Health: /api/v1/health/live
+```
+
+`--prod=false` is required: Render sets `NODE_ENV=production`, which would skip Nest CLI / TypeScript and break the build.
+
+**Web service**
+
+```
+Build:  pnpm install --frozen-lockfile --prod=false && pnpm run build:web
+Start:  pnpm run start:web
+```
+
+Set `NEXT_PUBLIC_API_URL` before the first web build.
