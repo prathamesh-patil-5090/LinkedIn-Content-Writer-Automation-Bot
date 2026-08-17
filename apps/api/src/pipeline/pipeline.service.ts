@@ -3,9 +3,11 @@ import { GENERATING_STATUSES } from '@ldp/shared';
 import { PrismaService } from '../prisma/prisma.module';
 import { NewsService } from '../news/news.service';
 import { AgentsService } from '../agents/agents.service';
-import { PixazoService } from '../media/pixazo.service';
+import { DeapiService } from '../media/deapi.service';
 import { TelegramService } from '../notifications/telegram.service';
 import { ConfigService } from '@nestjs/config';
+import { LinkedInService } from '../linkedin/linkedin.service';
+import { loadUsedIndex, UsedIndex } from './uniqueness';
 
 class PipelineCancelledError extends Error {
   constructor() {
@@ -25,9 +27,10 @@ export class PipelineService {
     private readonly prisma: PrismaService,
     private readonly news: NewsService,
     private readonly agents: AgentsService,
-    private readonly pixazo: PixazoService,
+    private readonly deapi: DeapiService,
     private readonly telegram: TelegramService,
     private readonly config: ConfigService,
+    private readonly linkedin: LinkedInService,
   ) {}
 
   async startRun(
@@ -47,8 +50,12 @@ export class PipelineService {
       });
     }
 
+    const blocking =
+      triggeredBy === 'cron'
+        ? [...GENERATING_STATUSES]
+        : [...GENERATING_STATUSES, 'pending_approval'];
     const inFlight = await this.prisma.run.findFirst({
-      where: { status: { in: [...GENERATING_STATUSES, 'pending_approval'] } },
+      where: { status: { in: blocking } },
     });
     if (inFlight) {
       throw Object.assign(
@@ -166,7 +173,14 @@ export class PipelineService {
         prediction_reason?: string;
       };
 
+      const used = await loadUsedIndex(this.prisma);
+
       if (selectedStory) {
+        if (used.matchesStory(selectedStory.title, selectedStory.link)) {
+          throw new Error(
+            'That story was already used. Pick a different source.',
+          );
+        }
         winner = {
           title: selectedStory.title,
           link: selectedStory.link,
@@ -192,58 +206,53 @@ export class PipelineService {
         await this.assertNotCancelled(runId);
         const { stories, collectedAt } = await this.news.collect(40);
         await this.assertNotCancelled(runId);
+        const fresh = used.unusedStories(stories);
         await this.prisma.run.update({
           where: { id: runId },
           data: {
             collectedAt,
-            storyCount: stories.length,
+            storyCount: fresh.length,
           },
         });
-        await this.logStep(runId, 'collect', `${stories.length} stories`, {
-          count: stories.length,
+        await this.logStep(runId, 'collect', `${fresh.length} unused of ${stories.length}`, {
+          count: fresh.length,
+          collected: stories.length,
         });
 
-        if (stories.length === 0) {
-          throw new Error('No stories collected from RSS feeds');
+        if (fresh.length === 0) {
+          throw new Error(
+            'No unused stories left — every candidate was already posted or drafted',
+          );
         }
 
         await this.setStatus(runId, 'researching');
         await this.assertNotCancelled(runId);
-        const research = await this.agents.research(stories);
+        const research = await this.agents.research(fresh);
         await this.assertNotCancelled(runId);
+        const unusedTop = used.unusedStories(research.data.top_stories);
+        if (unusedTop.length === 0) {
+          throw new Error(
+            'Research only returned stories that were already used',
+          );
+        }
+        const researchData = { top_stories: unusedTop };
         await this.prisma.run.update({
           where: { id: runId },
-          data: { topStoriesJson: research.data },
+          data: { topStoriesJson: researchData },
         });
         await this.logStep(
           runId,
           'research',
-          stories.slice(0, 3).map((s) => s.title).join('; '),
-          research.data,
+          unusedTop.slice(0, 3).map((s) => s.title).join('; '),
+          researchData,
           research.latencyMs,
         );
 
         await this.setStatus(runId, 'ranking');
         await this.assertNotCancelled(runId);
-        const rank = await this.agents.rank(research.data);
+        const rank = await this.agents.rank(researchData, used.summary());
         await this.assertNotCancelled(runId);
-        const duplicate = await this.isDuplicateWinner(rank.data.winner.title);
-        winner = rank.data.winner;
-        if (duplicate && research.data.top_stories.length > 1) {
-          const alt = research.data.top_stories.find(
-            (s) => s.title !== winner.title,
-          );
-          if (alt) {
-            winner = {
-              title: alt.title,
-              link: alt.link,
-              why_it_matters: alt.why_it_matters,
-              trend_score: alt.trend_score,
-              angle: alt.angle,
-              prediction_reason: 'Skipped duplicate of recent published title',
-            };
-          }
-        }
+        winner = this.pickUniqueWinner(rank.data, unusedTop, used);
         await this.prisma.run.update({
           where: { id: runId },
           data: { winnerJson: { ...rank.data, winner } },
@@ -259,31 +268,10 @@ export class PipelineService {
 
       await this.setStatus(runId, 'writing');
       await this.assertNotCancelled(runId);
-      const drafts = await this.agents.writeDrafts(winner);
+      const { voice, drafts } = await this.writeUniquePost(runId, winner, used);
       await this.assertNotCancelled(runId);
-      await this.logStep(runId, 'content', '3 drafts', drafts.data, drafts.latencyMs);
 
-      const samples = await this.activeSamples();
-      const voice = await this.agents.applyVoice({
-        drafts: drafts.data,
-        winner,
-        voiceSamples: samples,
-      });
-      await this.assertNotCancelled(runId);
-      await this.logStep(runId, 'voice', voice.data.hook, voice.data, voice.latencyMs);
-
-      await this.setStatus(runId, 'imaging');
-      await this.assertNotCancelled(runId);
-      const imageUrl = await this.pixazo.generateAndStore({
-        prompt: voice.data.image_prompt,
-        key: `drafts/${runId}/v1.png`,
-      });
-      await this.assertNotCancelled(runId);
-      await this.logStep(runId, 'image', imageUrl || 'unavailable', {
-        imageUrl,
-      });
-
-      await this.prisma.draft.create({
+      const draft = await this.prisma.draft.create({
         data: {
           runId,
           version: 1,
@@ -291,7 +279,7 @@ export class PipelineService {
           hook: voice.data.hook,
           postText: voice.data.post_text,
           imagePrompt: voice.data.image_prompt,
-          imageUrl,
+          imageUrl: null,
           hashtags: voice.data.hashtags,
           sourceTitle: voice.data.source_title || winner.title,
           sourceLink: voice.data.source_link || winner.link,
@@ -301,7 +289,14 @@ export class PipelineService {
       });
 
       await this.setStatus(runId, 'pending_approval');
-      await this.notifyDraftReady(runId);
+
+      await this.attachImage(runId, draft.id, {
+        prompt: voice.data.image_prompt,
+        hook: voice.data.hook,
+        source: voice.data.source_title || winner.title,
+        version: 1,
+      });
+      await this.finishRun(runId);
     } catch (err) {
       if (err instanceof PipelineCancelledError) {
         this.log.log(`Run ${runId} cancelled`);
@@ -346,26 +341,16 @@ export class PipelineService {
       const version =
         (await this.prisma.draft.count({ where: { runId } })) + 1;
 
-      const drafts = await this.agents.writeDrafts(winner);
-      await this.assertNotCancelled(runId);
-      const samples = await this.activeSamples();
-      const voice = await this.agents.applyVoice({
-        drafts: drafts.data,
+      const used = await loadUsedIndex(this.prisma);
+      const { voice, drafts } = await this.writeUniquePost(
+        runId,
         winner,
-        voiceSamples: samples,
+        used,
         feedback,
-      });
-      await this.assertNotCancelled(runId);
-      await this.logStep(runId, 'voice', voice.data.hook, voice.data, voice.latencyMs);
-
-      await this.setStatus(runId, 'imaging');
-      const imageUrl = await this.pixazo.generateAndStore({
-        prompt: voice.data.image_prompt,
-        key: `drafts/${runId}/v${version}.png`,
-      });
+      );
       await this.assertNotCancelled(runId);
 
-      await this.prisma.draft.create({
+      const draft = await this.prisma.draft.create({
         data: {
           runId,
           version,
@@ -373,7 +358,7 @@ export class PipelineService {
           hook: voice.data.hook,
           postText: voice.data.post_text,
           imagePrompt: voice.data.image_prompt,
-          imageUrl,
+          imageUrl: null,
           hashtags: voice.data.hashtags,
           sourceTitle: voice.data.source_title || winner.title,
           sourceLink: voice.data.source_link || winner.link,
@@ -385,6 +370,13 @@ export class PipelineService {
 
       await this.setStatus(runId, 'pending_approval');
       await this.notifyDraftReady(runId);
+
+      await this.attachImage(runId, draft.id, {
+        prompt: voice.data.image_prompt,
+        hook: voice.data.hook,
+        source: voice.data.source_title || winner.title,
+        version,
+      });
     } catch (err) {
       if (err instanceof PipelineCancelledError) {
         this.log.log(`Regen ${runId} cancelled`);
@@ -423,29 +415,207 @@ export class PipelineService {
     }
   }
 
+  private async attachImage(
+    runId: string,
+    draftId: string,
+    opts: { prompt: string; hook: string; source: string; version: number },
+  ) {
+    try {
+      await this.setStatus(runId, 'imaging');
+      await this.assertNotCancelled(runId);
+      const imageUrl = await this.deapi.generateAndStore({
+        prompt: opts.prompt,
+        hook: opts.hook,
+        source: opts.source,
+        key: `drafts/${runId}/v${opts.version}.png`,
+      });
+      await this.prisma.draft.update({
+        where: { id: draftId },
+        data: { imageUrl },
+      });
+      await this.logStep(runId, 'image', imageUrl || 'unavailable', {
+        imageUrl,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`Image skipped after text saved: ${msg}`);
+      await this.logStep(runId, 'image', 'skipped', { error: msg });
+    } finally {
+      const current = await this.prisma.run.findUnique({
+        where: { id: runId },
+        select: { status: true },
+      });
+      if (current?.status === 'imaging') {
+        await this.prisma.run.update({
+          where: { id: runId },
+          data: { status: 'pending_approval' },
+        });
+      }
+    }
+  }
+
+  private pickUniqueWinner(
+    rank: {
+      winner: {
+        title: string;
+        link: string;
+        why_it_matters: string;
+        angle: string;
+        trend_score?: number;
+        prediction_reason?: string;
+      };
+      runners_up?: Array<{ title: string }>;
+    },
+    topStories: Array<{
+      title: string;
+      link: string;
+      why_it_matters: string;
+      angle: string;
+      trend_score: number;
+    }>,
+    used: UsedIndex,
+  ) {
+    const byTitle = new Map(topStories.map((s) => [s.title, s]));
+    const candidates = [
+      rank.winner,
+      ...(rank.runners_up || [])
+        .map((r) => byTitle.get(r.title))
+        .filter((s): s is (typeof topStories)[number] => Boolean(s)),
+      ...topStories,
+    ];
+    const seen = new Set<string>();
+    for (const c of candidates) {
+      const key = `${c.link}|${c.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (used.matchesStory(c.title, c.link)) continue;
+      return {
+        title: c.title,
+        link: c.link,
+        why_it_matters: c.why_it_matters,
+        angle: c.angle,
+        trend_score: 'trend_score' in c ? c.trend_score : rank.winner.trend_score,
+        prediction_reason:
+          'prediction_reason' in c && c.prediction_reason
+            ? String(c.prediction_reason)
+            : 'Unique unused story',
+      };
+    }
+    throw new Error(
+      'No unused story left to post — all ranked candidates were already used',
+    );
+  }
+
+  private async writeUniquePost(
+    runId: string,
+    winner: {
+      title: string;
+      link: string;
+      why_it_matters: string;
+      angle: string;
+      trend_score?: number;
+      prediction_reason?: string;
+    },
+    used: UsedIndex,
+    feedback?: string,
+  ) {
+    const drafts = await this.agents.writeDrafts(winner, { hooks: used.hooks });
+    await this.logStep(runId, 'content', '2 essay drafts', drafts.data, drafts.latencyMs);
+
+    const samples = await this.activeSamples();
+    const voiceOpts = {
+      drafts: drafts.data,
+      winner,
+      voiceSamples: samples,
+      feedback,
+      avoidPosts: used.posts.slice(0, 8),
+    };
+    let voice = await this.agents.applyVoice(voiceOpts);
+    await this.logStep(runId, 'voice', voice.data.hook, voice.data, voice.latencyMs);
+
+    if (used.matchesPost(voice.data.post_text, voice.data.hook)) {
+      voice = await this.agents.applyVoice({
+        ...voiceOpts,
+        feedback: [
+          feedback,
+          'Rewrite from scratch. New hook, new examples, new closing question. Do not echo any previous post.',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      });
+      await this.logStep(
+        runId,
+        'voice',
+        `retry ${voice.data.hook}`,
+        voice.data,
+        voice.latencyMs,
+      );
+      if (used.matchesPost(voice.data.post_text, voice.data.hook)) {
+        throw new Error(
+          'Generated post was too similar to an earlier one — skipped to keep the feed unique',
+        );
+      }
+    }
+
+    return { voice, drafts };
+  }
+
+  private async finishRun(runId: string) {
+    const run = await this.prisma.run.findUnique({
+      where: { id: runId },
+      select: { triggeredBy: true, status: true },
+    });
+    if (run?.triggeredBy === 'cron') {
+      await this.maybeAutoPublish(runId);
+      return;
+    }
+    await this.notifyDraftReady(runId);
+  }
+
+  private async maybeAutoPublish(runId: string) {
+    if (this.config.get('CRON_AUTO_PUBLISH') === 'false') {
+      await this.notifyDraftReady(runId);
+      return;
+    }
+    const run = await this.prisma.run.findUnique({
+      where: { id: runId },
+      select: { triggeredBy: true, status: true, winnerJson: true },
+    });
+    if (run?.triggeredBy !== 'cron' || run.status !== 'pending_approval') {
+      return;
+    }
+    if (!this.linkedin.configured()) {
+      await this.prisma.run.update({
+        where: { id: runId },
+        data: {
+          status: 'failed',
+          errorMessage: 'Cron auto-publish needs LinkedIn connected',
+        },
+      });
+      return;
+    }
+    try {
+      const result = await this.linkedin.publishPendingRun(runId);
+      await this.logStep(runId, 'publish', result.urn || 'published', result);
+      this.log.log(`Auto-published run ${runId}`);
+      const w = run.winnerJson as { winner?: { title?: string } } | null;
+      const appUrl = this.config.get('APP_URL') || 'http://localhost:3000';
+      await this.telegram.ping(
+        `Published to LinkedIn (cron).\n${w?.winner?.title || runId}\n${appUrl}`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`Auto-publish failed for ${runId}: ${msg}`);
+      await this.telegram.ping(`Cron publish failed: ${msg}`);
+    }
+  }
+
   private async activeSamples() {
     return this.prisma.voiceSample.findMany({
       where: { isActive: true },
       orderBy: [{ createdAt: 'desc' }],
-      take: 8,
+      take: 3,
       select: { title: true, body: true },
-    });
-  }
-
-  private async isDuplicateWinner(title: string) {
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const recent = await this.prisma.run.findMany({
-      where: {
-        status: 'published',
-        publishedAt: { gte: since },
-      },
-      select: { winnerJson: true },
-    });
-    const norm = title.toLowerCase().replace(/\s+/g, ' ').trim();
-    return recent.some((r) => {
-      const w = r.winnerJson as { winner?: { title?: string } } | null;
-      const t = w?.winner?.title?.toLowerCase().replace(/\s+/g, ' ').trim();
-      return t === norm;
     });
   }
 

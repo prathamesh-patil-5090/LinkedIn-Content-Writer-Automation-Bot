@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack --port 3000",
+    "dev": "node scripts/run-next.cjs dev",
     "build": "next build",
-    "start": "next start --port 3000",
+    "start": "node scripts/run-next.cjs start",
     "lint": "eslint"
   },
   "dependencies": {

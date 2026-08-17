@@ -5,9 +5,12 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import * as path from 'path';
 import { AppModule } from './app.module';
+import { PrismaService } from './prisma/prisma.module';
+import { PrismaSessionStore } from './auth/prisma-session.store';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const prisma = app.get(PrismaService);
 
   app.setGlobalPrefix('api/v1');
   const uploadsDir = process.env.UPLOADS_DIR || './uploads';
@@ -19,6 +22,8 @@ async function bootstrap() {
       secret: process.env.SESSION_SECRET || 'dev-only-change-me',
       resave: false,
       saveUninitialized: false,
+      rolling: true,
+      store: new PrismaSessionStore(prisma),
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
@@ -40,7 +45,7 @@ async function bootstrap() {
     }),
   );
 
-  const port = Number(process.env.API_PORT || 3001);
+  const port = Number(process.env.API_PORT || process.env.PORT || 3001);
   await app.listen(port);
   console.log(`API listening on http://localhost:${port}/api/v1`);
 }

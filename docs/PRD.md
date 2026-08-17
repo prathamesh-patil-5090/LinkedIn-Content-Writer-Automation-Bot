@@ -141,10 +141,10 @@ After you Approve a draft, you can also **Save as voice sample** so future posts
 
 ### 6.6 Image agent
 
-- Generate **1024×1024** from `image_prompt` via **Pixazo free image APIs** (not OpenAI / DALL·E).
-- v1 primary: **Flux 1 Schnell** (`POST https://gateway.pixazo.ai/flux-1-schnell/v1/getData`). Auth header `Ocp-Apim-Subscription-Key`. Body: `prompt`, `width`, `height`, optional `num_steps` (4) and `seed`.
-- Response is `{ "output": "<cdn url>" }`. Download the file and store it on **Backblaze B2** (S3-compatible API); local `./uploads` in dev only. Persist the B2 public URL on the draft. Do not hotlink the Pixazo CDN long-term.
-- Fallback if Schnell is down or rate-limited: **SDXL v1.0** (`POST https://gateway.pixazo.ai/getImage/v1/getSDXLImage`), same 1024×1024. Do not use SD 1.5 as primary (max 512×512).
+- Generate **1024×1024** from `image_prompt` via **deAPI** (`Flux1schnell`), not OpenAI / DALL·E.
+- v1 primary: OpenAI-compatible `POST https://oai.deapi.ai/v1/images/generations` with `Authorization: Bearer dpn-sk-…` (the service prefixes `dpn-sk-` if the stored key is raw). Body: `model`, `prompt`, `size: "1024x1024"`, `n: 1`.
+- Fallback: native v2 `POST https://api.deapi.ai/api/v2/images/generations` then poll `GET /api/v2/jobs/{request_id}` until `done`, then download `result_url`.
+- Download the file and store it on **Backblaze B2** (S3-compatible API); local `./uploads` in dev only. Persist the B2/local public URL on the draft. Do not hotlink the deAPI results URL (it expires).
 - If image gen fails, continue the run: draft stays pending with no image; UI shows “image unavailable”. Never block approval on image failure.
 - v1: image is for review; LinkedIn publish may be **text-only** if media upload is not ready. UI must show this clearly.
 - v1.1: LinkedIn image upload (register upload → binary → create post with media).
@@ -239,7 +239,7 @@ NestJS
   ├── LinkedInModule      # OAuth + posts
   ├── MediaModule         # image gen + storage
   ├── NotificationsModule # Telegram optional
-  └── SchedulerModule     # @Cron 07:00 Asia/Kolkata
+  └── SchedulerModule     # Nest @Cron 07–00 IST every 2h
 
 Workers (same Nest process v1, BullMQ v1.1)
   └── pipeline queue: one job per run
@@ -248,7 +248,7 @@ PostgreSQL (Neon Free in prod; Docker locally)
 Redis (queue + optional cache; Docker locally / in-process v1)
 Backblaze B2 (images)
 Groq API (chat — free tier, OpenAI-compatible)
-Pixazo API (images — Flux Schnell / SDXL free)
+deAPI (images — Flux1schnell)
 LinkedIn REST API
 ```
 
@@ -387,12 +387,12 @@ Auth: session cookie (httpOnly) on all except login and LinkedIn OAuth callback.
 | UI       | Tailwind + shadcn/ui                             | Simple personal dashboard                                                  |
 | Auth     | Nest sessions or JWT in httpOnly cookie          | Just you                                                                   |
 | LLM      | Groq free API (OpenAI-compatible)                | Free key from [console.groq.com](https://console.groq.com); pin model IDs in env |
-| Image    | Pixazo Flux 1 Schnell (free), SDXL fallback      | 1024×1024; key from [api-console.pixazo.ai](https://api-console.pixazo.ai/api_keys) |
+| Image    | deAPI Flux1schnell                               | 1024×1024; key from [app.deapi.ai/dashboard](https://app.deapi.ai/dashboard) |
 | LinkedIn | HTTP to `https://api.linkedin.com/rest/posts`    | Native n8n node is flaky; version header required                          |
-| Storage  | Backblaze B2 (S3-compatible); local `./uploads` in dev | Persist downloaded Pixazo output, not the CDN URL                    |
+| Storage  | Backblaze B2 (S3-compatible); local `./uploads` in dev | Persist downloaded deAPI output, not the expiring result URL         |
 | Monorepo | `apps/api`, `apps/web`, `packages/shared` (pnpm) | Shared types for Run/Draft                                                 |
 
-**Frontend talks only to NestJS.** Do not call Groq, Pixazo, or LinkedIn from the browser.
+**Frontend talks only to NestJS.** Do not call Groq, deAPI, or LinkedIn from the browser.
 
 ### 11.1 Groq (chat agents)
 
@@ -413,16 +413,16 @@ Force JSON with `response_format: { "type": "json_object" }`. Parse with zod. In
 
 **Rate limits:** Groq free tier is RPM/TPM per model (see console). A daily run is ~4 chat calls plus 1–2 on reject — fine for personal use.
 
-### 11.2 Pixazo (images)
+### 11.2 deAPI (images)
 
-Key: [api-console.pixazo.ai/api_keys](https://api-console.pixazo.ai/api_keys). Header: `Ocp-Apim-Subscription-Key`. Docs: [pixazo.ai/api/free](https://www.pixazo.ai/api/free).
+Key: [app.deapi.ai/dashboard](https://app.deapi.ai/dashboard) → Settings → API Keys. Docs: [docs.deapi.ai](https://docs.deapi.ai/api/v2/images/generations). New accounts get a small credit bonus.
 
 | Role | Model | Endpoint | Size |
 | ---- | ----- | -------- | ---- |
-| Primary | Flux 1 Schnell (free) | `POST https://gateway.pixazo.ai/flux-1-schnell/v1/getData` | 1024×1024 (defaults) |
-| Fallback | SDXL v1.0 (free) | `POST https://gateway.pixazo.ai/getImage/v1/getSDXLImage` | 1024×1024 |
+| Primary | Flux1schnell | `POST https://oai.deapi.ai/v1/images/generations` | 1024×1024 |
+| Fallback | Flux1schnell | `POST https://api.deapi.ai/api/v2/images/generations` + poll `/api/v2/jobs/{id}` | 1024×1024 |
 
-Flux Schnell is free during preview with a fair-use cap of **60 RPM**. If Pixazo returns 429/5xx, retry once then fall back to SDXL; if both fail, continue without an image.
+Auth: `Authorization: Bearer $DEAPI_API_KEY`. The OpenAI-compat host requires a `dpn-sk-` prefix; native v2 uses the raw key. If either path fails, continue the run without an image.
 
 ### 11.3 Hosting: Neon Postgres + Backblaze B2
 
@@ -481,7 +481,7 @@ Voice is a **dataset**, not a slogan. This app copies **your** writing style, no
 
 ### Phase 0 — Repo (2–3 days)
 
-- pnpm monorepo, Nest + Next + Prisma, env example, Docker Compose (local Postgres + Redis).
+- pnpm monorepo, Nest + Next + Prisma, `apps/api/.env.example` + `apps/web/.env.example`, Docker Compose (local Postgres + Redis).
 - Prod data: Neon Free Postgres (`DATABASE_URL` + `DIRECT_URL`); images: Backblaze B2.
 - Seed your login, 4 RSS sources, 4 voice samples from `prompts/voice-samples.md`.
 
@@ -489,7 +489,7 @@ Voice is a **dataset**, not a slogan. This app copies **your** writing style, no
 
 - News collect + normalize (no LLM).
 - Research, rank, content, voice agents as Nest providers with JSON schemas (zod).
-- Image gen via Pixazo Flux Schnell; store on local disk in dev, Backblaze B2 in prod.
+- Image gen via deAPI Flux1schnell; store on local disk in dev, Backblaze B2 in prod.
 - `POST /runs` + worker; persist run + draft.
 - No LinkedIn yet; status stops at `pending_approval`.
 
@@ -504,7 +504,7 @@ Voice is a **dataset**, not a slogan. This app copies **your** writing style, no
 
 - OAuth connect in Settings.
 - Publish on approve; error handling.
-- `@Cron('0 7 * * *', { timeZone: 'Asia/Kolkata' })`.
+- `@Cron('0 7,9,11,13,15,17,19,21,23,0 * * *', { timeZone: 'Asia/Kolkata' })`.
 - Optional Telegram “draft ready” + link to `/`.
 
 ### Phase 4 — Harden (ongoing)
@@ -523,7 +523,7 @@ Voice is a **dataset**, not a slogan. This app copies **your** writing style, no
 
 | n8n node                          | NestJS                     | Next.js               |
 | --------------------------------- | -------------------------- | --------------------- |
-| Cron 7:00                         | `SchedulerService`         | Settings: cron on/off |
+| Cron 07–00 IST every 2h           | `SchedulerService` @Cron   | Settings: cron on/off |
 | Manual trigger                    | `POST /runs`               | Generate now          |
 | RSS × 4 + Merge + Code            | `NewsService`              | Settings → sources    |
 | Research / Rank / Content / Voice | `AgentsService`            | Run detail            |
@@ -540,7 +540,7 @@ Voice is a **dataset**, not a slogan. This app copies **your** writing style, no
 - Timezone: Asia/Kolkata.
 - One pipeline job at a time (Redis lock `pipeline:lock`).
 - LLM timeout 120s per step; run fails with `error_message` if a step dies.
-- Secrets in env: `GROQ_API_KEY`, `PIXAZO_API_KEY`, `LINKEDIN_CLIENT_ID/SECRET`, `DATABASE_URL` + `DIRECT_URL` (Neon), `B2_*` keys, `REDIS_URL`, `ENCRYPTION_KEY` for tokens.
+- Secrets in env: `GROQ_API_KEY`, `DEAPI_API_KEY`, `LINKEDIN_CLIENT_ID/SECRET`, `DATABASE_URL` + `DIRECT_URL` (Neon), `B2_*` keys, `REDIS_URL`, `ENCRYPTION_KEY` for tokens.
 - Do not log access tokens or full API keys.
 - LinkedIn: respect ToS; this app posts **only** to your own personal profile after you tap Approve.
 
@@ -564,7 +564,7 @@ Voice is a **dataset**, not a slogan. This app copies **your** writing style, no
 | Model drifts off-voice             | More samples; keep temperature ~0.55; human edit always available      |
 | RSS feeds break                    | Per-source try/catch; run continues with remaining feeds               |
 | Double publish                     | Idempotent approve; status check before LinkedIn POST                  |
-| Cost / free-tier churn             | Pin Groq + Pixazo free models; env fallbacks; cap one generate/day unless manual; log token usage |
+| Cost / free-tier churn             | Pin Groq + deAPI Flux1schnell; env fallbacks; cap one generate/day unless manual; log token usage |
 | LinkedIn automation policy         | Human confirmation required; no scraping LinkedIn; no unsolicited spam |
 | Neon compute asleep (5 min idle)   | First 07:00 query auto-wakes (~1s); retry once on connection error     |
 | Cannot read old posts via OAuth    | `r_member_social` is closed; import official `Shares.csv`; save posts this app publishes |

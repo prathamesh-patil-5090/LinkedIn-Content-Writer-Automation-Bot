@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.module';
+import { MediaService } from '../media/media.service';
+import { escapeLinkedInCommentary } from './commentary';
 
 @Injectable()
 export class LinkedInService {
@@ -9,6 +11,7 @@ export class LinkedInService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly media: MediaService,
   ) {}
 
   configured(): boolean {
@@ -113,7 +116,75 @@ export class LinkedInService {
     await this.prisma.linkedInConnection.deleteMany({ where: { userId } });
   }
 
-  async publishText(userId: string, commentary: string) {
+  async publishPendingRun(runId: string) {
+    const conn = await this.prisma.linkedInConnection.findFirst({
+      orderBy: { connectedAt: 'desc' },
+    });
+    if (!conn) throw new Error('LinkedIn not connected');
+
+    const draft = await this.prisma.draft.findFirst({
+      where: { runId, status: 'pending' },
+      orderBy: { version: 'desc' },
+    });
+    if (!draft?.postText?.trim()) {
+      throw new Error('No pending draft text to publish');
+    }
+
+    await this.prisma.draft.update({
+      where: { id: draft.id },
+      data: { status: 'approved' },
+    });
+    await this.prisma.run.update({
+      where: { id: runId },
+      data: { status: 'publishing', errorMessage: null },
+    });
+
+    try {
+      const result = await this.publishText(
+        conn.userId,
+        draft.postText,
+        draft.imageUrl,
+      );
+      await this.prisma.run.update({
+        where: { id: runId },
+        data: {
+          status: 'published',
+          publishedAt: new Date(),
+          linkedinPostUrn: result.urn,
+        },
+      });
+      await this.prisma.voiceSample.create({
+        data: {
+          title:
+            draft.hook ||
+            draft.sourceTitle ||
+            `Published ${new Date().toISOString().slice(0, 10)}`,
+          body: draft.postText,
+          sourceUrl: draft.sourceLink,
+          source: 'published_by_app',
+          isActive: true,
+        },
+      });
+      return { urn: result.urn };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.prisma.run.update({
+        where: { id: runId },
+        data: { status: 'pending_approval', errorMessage: message },
+      });
+      await this.prisma.draft.update({
+        where: { id: draft.id },
+        data: { status: 'pending' },
+      });
+      throw err;
+    }
+  }
+
+  async publishText(
+    userId: string,
+    commentary: string,
+    imageUrl?: string | null,
+  ) {
     const conn = await this.prisma.linkedInConnection.findUnique({
       where: { userId },
     });
@@ -121,6 +192,36 @@ export class LinkedInService {
 
     const version =
       this.config.get('LINKEDIN_API_VERSION') || '202607';
+
+    let mediaUrn: string | null = null;
+    if (imageUrl) {
+      try {
+        mediaUrn = await this.uploadImage(conn.accessToken, conn.personUrn, imageUrl);
+      } catch (err) {
+        this.log.warn(
+          `LinkedIn image upload failed, posting text only: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+      }
+    }
+
+    const body: Record<string, unknown> = {
+      author: conn.personUrn,
+      commentary: escapeLinkedInCommentary(commentary),
+      visibility: 'PUBLIC',
+      distribution: {
+        feedDistribution: 'MAIN_FEED',
+        targetEntities: [],
+        thirdPartyDistributionChannels: [],
+      },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    };
+    if (mediaUrn) {
+      body.content = { media: { id: mediaUrn } };
+    }
+
     const res = await fetch('https://api.linkedin.com/rest/posts', {
       method: 'POST',
       headers: {
@@ -129,18 +230,7 @@ export class LinkedInService {
         'X-Restli-Protocol-Version': '2.0.0',
         'LinkedIn-Version': version,
       },
-      body: JSON.stringify({
-        author: conn.personUrn,
-        commentary,
-        visibility: 'PUBLIC',
-        distribution: {
-          feedDistribution: 'MAIN_FEED',
-          targetEntities: [],
-          thirdPartyDistributionChannels: [],
-        },
-        lifecycleState: 'PUBLISHED',
-        isReshareDisabledByAuthor: false,
-      }),
+      body: JSON.stringify(body),
     });
 
     const text = await res.text();
@@ -173,5 +263,54 @@ export class LinkedInService {
         : null);
 
     return { urn, response: json };
+  }
+
+  private async uploadImage(
+    accessToken: string,
+    personUrn: string,
+    imageUrl: string,
+  ) {
+    const version = this.config.get('LINKEDIN_API_VERSION') || '202607';
+    const { bytes, contentType } = await this.media.readImage(imageUrl);
+
+    const initRes = await fetch(
+      'https://api.linkedin.com/rest/images?action=initializeUpload',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'X-Restli-Protocol-Version': '2.0.0',
+          'LinkedIn-Version': version,
+        },
+        body: JSON.stringify({
+          initializeUploadRequest: { owner: personUrn },
+        }),
+      },
+    );
+    const initJson = (await initRes.json()) as {
+      value?: { uploadUrl?: string; image?: string };
+      message?: string;
+    };
+    const uploadUrl = initJson.value?.uploadUrl;
+    const imageUrn = initJson.value?.image;
+    if (!initRes.ok || !uploadUrl || !imageUrn) {
+      throw new Error(initJson.message || `LinkedIn image init ${initRes.status}`);
+    }
+
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': contentType || 'image/png',
+        'Content-Length': String(bytes.length),
+      },
+      body: new Uint8Array(bytes),
+    });
+    if (!putRes.ok) {
+      const t = await putRes.text();
+      throw new Error(`LinkedIn image PUT ${putRes.status}: ${t.slice(0, 200)}`);
+    }
+    return imageUrn;
   }
 }

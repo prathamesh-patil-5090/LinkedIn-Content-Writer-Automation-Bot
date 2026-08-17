@@ -60,6 +60,10 @@ export class SettingsController {
         },
         storage,
       },
+      cron: {
+        schedule: 'Every 2 hours, 07:00–00:00 Asia/Kolkata',
+        autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
+      },
     };
   }
 

@@ -15,7 +15,7 @@ export class TelegramService {
       ready,
       hint: ready
         ? undefined
-        : 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env',
+        : 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in apps/api/.env',
     };
   }
 

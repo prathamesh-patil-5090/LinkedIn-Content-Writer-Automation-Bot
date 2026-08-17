@@ -1,7 +1,9 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Controller, Post, UseGuards } from '@nestjs/common';
 import { SessionAuthGuard } from '../auth/session.guard';
 import { NewsService } from './news.service';
 import { AgentsService } from '../agents/agents.service';
+import { PrismaService } from '../prisma/prisma.module';
+import { loadUsedIndex } from '../pipeline/uniqueness';
 
 @Controller('news')
 @UseGuards(SessionAuthGuard)
@@ -9,12 +11,15 @@ export class NewsController {
   constructor(
     private readonly news: NewsService,
     private readonly agents: AgentsService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post('candidates')
   async candidates() {
+    const used = await loadUsedIndex(this.prisma);
     const { stories, collectedAt } = await this.news.collect(50);
-    if (stories.length === 0) {
+    const fresh = used.unusedStories(stories);
+    if (fresh.length === 0) {
       return {
         collectedAt,
         stories: [],
@@ -23,11 +28,22 @@ export class NewsController {
       };
     }
 
-    const research = await this.agents.research(stories);
-    const top = research.data.top_stories.slice(0, 12);
-    const rank = await this.agents.rank({ top_stories: top });
+    const research = await this.agents.research(fresh);
+    const top = used.unusedStories(research.data.top_stories).slice(0, 12);
+    if (top.length === 0) {
+      return {
+        collectedAt,
+        stories: [],
+        suggested: null,
+        storyCount: fresh.length,
+      };
+    }
+    const rank = await this.agents.rank({ top_stories: top }, used.summary());
 
-    const suggested = rank.data.winner;
+    let suggested = rank.data.winner;
+    if (used.matchesStory(suggested.title, suggested.link)) {
+      suggested = top[0];
+    }
     const storiesWithFlag = top.map((s) => ({
       ...s,
       suggested:

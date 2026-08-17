@@ -37,9 +37,31 @@ export class MediaService {
     };
   }
 
+  async readImage(url: string): Promise<{ bytes: Buffer; contentType: string }> {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) throw new Error(`Could not read image (${res.status})`);
+      return {
+        bytes: Buffer.from(await res.arrayBuffer()),
+        contentType: res.headers.get('content-type') || 'image/png',
+      };
+    }
+    const root = this.config.get<string>('UPLOADS_DIR') || './uploads';
+    const rel = url.replace(/^\/uploads\//, '');
+    const full = path.join(root, rel);
+    const bytes = await fs.readFile(full);
+    return { bytes, contentType: 'image/png' };
+  }
+
   async saveImage(bytes: Buffer, key: string, contentType = 'image/png') {
     if (this.driver() === 'b2') {
-      return this.saveToB2(bytes, key, contentType);
+      try {
+        return await this.saveToB2(bytes, key, contentType);
+      } catch (err) {
+        this.log.warn(
+          `B2 upload failed, saving locally: ${err instanceof Error ? err.message : err}`,
+        );
+      }
     }
     return this.saveLocal(bytes, key);
   }
@@ -105,7 +127,7 @@ export class MediaService {
     const full = path.join(root, key);
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, bytes);
-    const port = this.config.get('API_PORT') || 3001;
+    const port = this.config.get('API_PORT') || this.config.get('PORT') || 3001;
     const publicBase =
       this.config.get<string>('UPLOADS_PUBLIC_BASE_URL') ||
       `http://localhost:${port}`;

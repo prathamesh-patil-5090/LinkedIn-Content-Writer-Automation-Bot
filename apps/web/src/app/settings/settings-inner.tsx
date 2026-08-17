@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, isUnauthorized } from '@/lib/api';
 import { AppShell } from '@/components/AppShell';
 
-type Me = { linkedinConnected: boolean };
+type Me = { email: string; linkedinConnected: boolean };
 type Settings = {
   timezone: string;
   cronEnabled: boolean;
   telegramEnabled: boolean;
   telegramChatId?: string | null;
+  cron?: { schedule: string; autoPublish: boolean };
   integrations?: {
     telegram: { ready: boolean; envTokenSet: boolean; envChatIdSet: boolean };
     storage: { driver: string; ready: boolean; hint?: string };
@@ -38,8 +39,8 @@ export default function SettingsInner() {
         setMe(user);
         const s = await apiFetch<Settings>('/settings');
         setSettings(s);
-      } catch {
-        router.replace('/login');
+      } catch (err) {
+        if (isUnauthorized(err)) router.replace('/login');
       }
     })();
   }, [router]);
@@ -100,7 +101,7 @@ export default function SettingsInner() {
     setBusy('li');
     try {
       await apiFetch('/linkedin/connection', { method: 'DELETE' });
-      setMe({ linkedinConnected: false });
+      setMe((m) => (m ? { ...m, linkedinConnected: false } : m));
     } finally {
       setBusy(null);
     }
@@ -110,11 +111,15 @@ export default function SettingsInner() {
   const storage = settings?.integrations?.storage;
 
   if (!settings || !me) {
-    return <main className="shell muted">Loading…</main>;
+    return (
+      <div className="app">
+        <main className="main muted">Loading…</main>
+      </div>
+    );
   }
 
   return (
-    <AppShell title="Settings" kicker="Integrations & schedule">
+    <AppShell title="Settings" email={me.email} kicker="Schedule and integrations">
       {liFlash === 'connected' ? (
         <p className="pill ok" style={{ marginBottom: 12 }}>
           LinkedIn connected
@@ -126,83 +131,81 @@ export default function SettingsInner() {
         </p>
       ) : null}
 
-      <section className="panel">
-        <h2>Schedule</h2>
-        <p style={{ margin: 0 }}>
-          Timezone: <strong>{settings.timezone}</strong>
-        </p>
-        <p style={{ margin: 0 }}>
-          Cron (07:00 IST):{' '}
-          <strong>{settings.cronEnabled ? 'on' : 'off'}</strong>
-        </p>
-        <button
-          className="btn"
-          onClick={() => void toggleCron()}
-          disabled={busy === 'cron'}
-        >
-          {settings.cronEnabled ? 'Disable cron' : 'Enable cron'}
-        </button>
-      </section>
-
-      <section className="panel">
-        <h2>LinkedIn</h2>
-        <p className="muted" style={{ margin: 0, fontSize: 14 }}>
-          {me.linkedinConnected
-            ? 'Connected — Approve will publish to your profile.'
-            : 'Not connected. OAuth needs w_member_social.'}
-        </p>
-        {me.linkedinConnected ? (
-          <button
-            className="btn danger"
-            onClick={() => void disconnectLinkedIn()}
-            disabled={busy === 'li'}
-          >
-            Disconnect
-          </button>
-        ) : (
-          <a className="btn primary" href={`${API_BASE}/linkedin/oauth/start`}>
-            Connect LinkedIn
-          </a>
-        )}
-      </section>
-
-      <section className="panel">
-        <h2>Telegram</h2>
-        <p className="muted" style={{ margin: 0, fontSize: 14 }}>
-          Token in .env: {tg?.envTokenSet ? 'yes' : 'no'} · Chat ID in .env:{' '}
-          {tg?.envChatIdSet ? 'yes' : 'no'}
-        </p>
-        <button
-          className="btn"
-          onClick={() => void testTelegram()}
-          disabled={busy === 'tg' || !tg?.ready}
-        >
-          {busy === 'tg' ? 'Sending…' : 'Send test ping'}
-        </button>
-        {tgMsg ? <p style={{ margin: 0, fontSize: 14 }}>{tgMsg}</p> : null}
-      </section>
-
-      <section className="panel">
-        <h2>Storage</h2>
-        <p className="muted" style={{ margin: 0, fontSize: 14 }}>
-          Driver: {storage?.driver}
-          {storage?.ready
-            ? ' · ready'
-            : ` · not ready${storage?.hint ? ` (${storage.hint})` : ''}`}
-        </p>
-        <button
-          className="btn"
-          onClick={() => void testStorage()}
-          disabled={busy === 'st'}
-        >
-          {busy === 'st' ? 'Checking…' : 'Test upload'}
-        </button>
-        {stMsg ? (
-          <p style={{ margin: 0, fontSize: 14, wordBreak: 'break-all' }}>
-            {stMsg}
+      <div className="settings-grid">
+        <section className="card stack">
+          <h2>Schedule</h2>
+          <p style={{ margin: 0 }}>
+            {settings.timezone} · cron {settings.cronEnabled ? 'on' : 'off'}
           </p>
-        ) : null}
-      </section>
+          <p className="muted" style={{ margin: 0 }}>
+            Runs on the API process · {settings.cron?.schedule}
+            {settings.cron?.autoPublish ? ' · auto-publish' : ' · draft only'}
+          </p>
+          <button
+            className="btn"
+            onClick={() => void toggleCron()}
+            disabled={busy === 'cron'}
+          >
+            {settings.cronEnabled ? 'Disable cron' : 'Enable cron'}
+          </button>
+        </section>
+
+        <section className="card stack">
+          <h2>LinkedIn</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {me.linkedinConnected
+              ? 'Connected. Approve publishes to your profile.'
+              : 'Not connected. Needs w_member_social.'}
+          </p>
+          {me.linkedinConnected ? (
+            <button
+              className="btn danger"
+              onClick={() => void disconnectLinkedIn()}
+              disabled={busy === 'li'}
+            >
+              Disconnect
+            </button>
+          ) : (
+            <a className="btn primary" href={`${API_BASE}/linkedin/oauth/start`}>
+              Connect LinkedIn
+            </a>
+          )}
+        </section>
+
+        <section className="card stack">
+          <h2>Telegram</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            Token {tg?.envTokenSet ? 'set' : 'missing'} · chat id{' '}
+            {tg?.envChatIdSet ? 'set' : 'missing'}
+          </p>
+          <button
+            className="btn"
+            onClick={() => void testTelegram()}
+            disabled={busy === 'tg' || !tg?.ready}
+          >
+            {busy === 'tg' ? 'Sending…' : 'Send test ping'}
+          </button>
+          {tgMsg ? <p style={{ margin: 0 }}>{tgMsg}</p> : null}
+        </section>
+
+        <section className="card stack">
+          <h2>Storage</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {storage?.driver}
+            {storage?.ready ? ' · ready' : ` · not ready`}
+          </p>
+          <button
+            className="btn"
+            onClick={() => void testStorage()}
+            disabled={busy === 'st'}
+          >
+            {busy === 'st' ? 'Checking…' : 'Test upload'}
+          </button>
+          {stMsg ? (
+            <p style={{ margin: 0, wordBreak: 'break-all' }}>{stMsg}</p>
+          ) : null}
+        </section>
+      </div>
     </AppShell>
   );
 }

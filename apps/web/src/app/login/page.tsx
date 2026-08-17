@@ -3,6 +3,7 @@
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
+import { BrandMark } from '@/components/AppShell';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,45 +30,46 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="login-wrap">
-      <form className="login-card" onSubmit={onSubmit}>
+    <main className="login-split">
+      <section className="login-hero">
         <div>
-          <p className="brand-kicker">Personal tool</p>
-          <h1>LinkedIn Daily Poster</h1>
-          <p className="muted" style={{ margin: '8px 0 0' }}>
-            Draft developer-focused posts in your voice.
-          </p>
+          <BrandMark />
+          <h1>Ship a developer post every two hours — in your voice.</h1>
         </div>
-
-        <label className="field">
-          <span>Email</span>
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
-            required
-            autoComplete="username"
-          />
-        </label>
-
-        <label className="field">
-          <span>Password</span>
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            required
-            minLength={6}
-            autoComplete="current-password"
-          />
-        </label>
-
-        {error ? <p className="error-text">{error}</p> : null}
-
-        <button className="btn primary" type="submit" disabled={loading}>
-          {loading ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
+        <p className="muted" style={{ margin: 0, maxWidth: 360 }}>
+          News in. Ranked. Written. You approve, or cron publishes it.
+        </p>
+      </section>
+      <section className="login-form">
+        <form className="login-card" onSubmit={onSubmit}>
+          <h2>Sign in</h2>
+          <label className="field">
+            <span>Email</span>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              type="email"
+              required
+              autoComplete="username"
+            />
+          </label>
+          <label className="field">
+            <span>Password</span>
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              required
+              minLength={6}
+              autoComplete="current-password"
+            />
+          </label>
+          {error ? <p className="error-text">{error}</p> : null}
+          <button className="btn primary" type="submit" disabled={loading}>
+            {loading ? 'Signing in…' : 'Continue'}
+          </button>
+        </form>
+      </section>
     </main>
   );
 }

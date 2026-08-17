@@ -41,6 +41,9 @@ export class AuthController {
 
     req.session.userId = user.id;
     req.session.email = user.email;
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((err) => (err ? reject(err) : resolve()));
+    });
 
     const linkedin = await this.prisma.linkedInConnection.findUnique({
       where: { userId: user.id },
@@ -59,7 +62,12 @@ export class AuthController {
     await new Promise<void>((resolve, reject) => {
       req.session.destroy((err) => (err ? reject(err) : resolve()));
     });
-    res.clearCookie('ldp.sid');
+    res.clearCookie('ldp.sid', {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+    });
     return { ok: true };
   }
 

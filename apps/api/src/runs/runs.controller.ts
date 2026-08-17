@@ -193,7 +193,11 @@ export class RunsController {
     });
 
     try {
-      const result = await this.linkedin.publishText(user.id, draft.postText);
+      const result = await this.linkedin.publishText(
+        user.id,
+        draft.postText,
+        draft.imageUrl,
+      );
       await this.prisma.run.update({
         where: { id },
         data: {

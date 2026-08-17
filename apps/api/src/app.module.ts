@@ -18,7 +18,7 @@ import { NewsModule } from './news/news.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env', '../../.env'],
+      envFilePath: ['.env'],
     }),
     ScheduleModule.forRoot(),
     PrismaModule,

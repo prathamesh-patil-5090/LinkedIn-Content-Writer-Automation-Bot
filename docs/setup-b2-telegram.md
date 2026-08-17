@@ -1,6 +1,6 @@
 # Backblaze B2 + Telegram setup
 
-Do these in the browser / Telegram app. Paste values into the **repo root** `.env`. Never commit that file.
+Do these in the browser / Telegram app. Paste values into **`apps/api/.env`**. Never commit that file.
 
 ## Backblaze B2 (images)
 
@@ -18,7 +18,7 @@ Do these in the browser / Telegram app. Paste values into the **repo root** `.en
    - Type: **Read and Write**
 6. Copy `keyID` and `applicationKey` (secret is shown **once**).
 
-`.env`:
+`apps/api/.env`:
 
 ```env
 MEDIA_DRIVER=b2
@@ -50,7 +50,7 @@ https://api.telegram.org/botTOKEN/getUpdates
 
 If `result` is `[]`, you have not messaged the bot yet. Send `hi` again and refresh.
 
-`.env`:
+`apps/api/.env`:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456789:AA...

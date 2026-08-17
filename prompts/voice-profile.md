@@ -15,7 +15,8 @@ LLMs don't use audio. They mimic **writing style** from real text samples (few-s
 
 ## Voice patterns (from real posts)
 - Casual, direct English — not corporate brochure
-- Short status updates + “will tell more soon”
+- LinkedIn posts: a short hook, then exactly two long paragraphs of flowing prose (not bullets, not one-liners)
+- Short status updates + “will tell more soon” (in samples; daily posts should still be two paragraphs)
 - Self-aware humor (“condition known as No Money”, emoji closers)
 - Numbered lists and simple flow diagrams (⬇️ steps)
 - Admits product mistakes and what you changed

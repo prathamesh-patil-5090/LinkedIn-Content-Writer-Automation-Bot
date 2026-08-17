@@ -1,20 +1,15 @@
 import type { Metadata } from 'next';
-import { Outfit, Source_Sans_3 } from 'next/font/google';
+import { Geist } from 'next/font/google';
 import './globals.css';
 
-const outfit = Outfit({
-  variable: '--font-outfit',
+const geist = Geist({
   subsets: ['latin'],
-});
-
-const sourceSans = Source_Sans_3({
-  variable: '--font-source-sans',
-  subsets: ['latin'],
+  variable: '--font-geist',
 });
 
 export const metadata: Metadata = {
-  title: 'LinkedIn Daily Poster',
-  description: 'Personal daily LinkedIn draft + approve + publish',
+  title: 'Daily Poster',
+  description: 'Personal LinkedIn draft + approve + publish',
 };
 
 export default function RootLayout({
@@ -23,10 +18,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${outfit.variable} ${sourceSans.variable} antialiased`}>
-        {children}
-      </body>
+    <html lang="en" className={geist.variable}>
+      <body className={geist.className}>{children}</body>
     </html>
   );
 }

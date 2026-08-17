@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, isUnauthorized } from '@/lib/api';
 import { AppShell } from '@/components/AppShell';
 
 type RunDetail = {
@@ -34,42 +34,49 @@ export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [run, setRun] = useState<RunDetail | null>(null);
+  const [email, setEmail] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
-        await apiFetch('/me');
+        const me = await apiFetch<{ email: string }>('/me');
+        setEmail(me.email);
         const res = await apiFetch<RunDetail>(`/runs/${id}`);
         setRun(res);
-      } catch {
-        router.replace('/login');
+      } catch (err) {
+        if (isUnauthorized(err)) router.replace('/login');
       }
     })();
   }, [id, router]);
 
   if (!run) {
-    return <main className="shell muted">Loading…</main>;
+    return (
+      <div className="app">
+        <main className="main muted">Loading…</main>
+      </div>
+    );
   }
 
   return (
-    <AppShell title={`Run ${run.id.slice(0, 8)}`} kicker={run.status}>
-      <section className="panel">
+    <AppShell
+      title={`Run ${run.id.slice(0, 8)}`}
+      email={email}
+      kicker={run.status.replaceAll('_', ' ')}
+    >
+      <section className="card stack">
         <p className="muted" style={{ margin: 0 }}>
           {new Date(run.createdAt).toLocaleString()}
           {run.storyCount != null ? ` · ${run.storyCount} stories` : ''}
         </p>
-        {run.errorMessage ? (
-          <p className="error-text">{run.errorMessage}</p>
-        ) : null}
+        {run.errorMessage ? <p className="error-text">{run.errorMessage}</p> : null}
         {run.winnerJson?.winner?.title ? (
           <p style={{ margin: 0 }}>
-            Winner:{' '}
             {run.winnerJson.winner.link ? (
               <a
                 href={run.winnerJson.winner.link}
                 target="_blank"
                 rel="noreferrer"
-                style={{ color: 'var(--accent)', fontWeight: 600 }}
+                style={{ color: 'var(--accent-2)' }}
               >
                 {run.winnerJson.winner.title}
               </a>
@@ -78,51 +85,40 @@ export default function RunDetailPage() {
             )}
           </p>
         ) : null}
-        {run.linkedinPostUrn ? (
-          <p className="muted" style={{ margin: 0, fontSize: 14 }}>
-            LinkedIn URN: {run.linkedinPostUrn}
-          </p>
-        ) : null}
       </section>
 
-      <section className="panel" style={{ marginTop: 16 }}>
+      <section className="card stack" style={{ marginTop: 16 }}>
         <h2>Drafts</h2>
         {run.drafts.map((d) => (
-          <article key={d.id} style={{ display: 'grid', gap: 8 }}>
+          <article key={d.id} className="stack">
             <strong>
               v{d.version} · {d.status}
             </strong>
-            {d.hook ? <p style={{ margin: 0 }}>{d.hook}</p> : null}
+            {d.hook ? <p className="hook">{d.hook}</p> : null}
             {d.postText ? (
-              <pre
-                className="muted"
-                style={{
-                  whiteSpace: 'pre-wrap',
-                  fontFamily: 'inherit',
-                  fontSize: 14,
-                  margin: 0,
-                }}
-              >
+              <p className="muted" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                 {d.postText}
-              </pre>
+              </p>
             ) : null}
           </article>
         ))}
       </section>
 
-      <section className="panel" style={{ marginTop: 16 }}>
-        <h2>Pipeline logs</h2>
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
+      <section className="card stack" style={{ marginTop: 16 }}>
+        <h2>Logs</h2>
+        <div className="list">
           {run.logs.map((l) => (
-            <li key={l.id} style={{ marginBottom: 8, fontSize: 14 }}>
+            <div key={l.id}>
               <strong>{l.step}</strong>
-              {l.latencyMs != null ? ` · ${l.latencyMs}ms` : ''}
+              {l.latencyMs != null ? (
+                <span className="muted"> · {l.latencyMs}ms</span>
+              ) : null}
               {l.inputExcerpt ? (
                 <div className="muted">{l.inputExcerpt.slice(0, 160)}</div>
               ) : null}
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       </section>
     </AppShell>
   );

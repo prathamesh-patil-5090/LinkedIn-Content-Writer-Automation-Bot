@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.module';
 import { PipelineService } from '../pipeline/pipeline.service';
+import { shouldRunCronSlot } from './cron-window';
 
 @Injectable()
 export class SchedulerService {
@@ -14,26 +15,37 @@ export class SchedulerService {
     private readonly pipeline: PipelineService,
   ) {}
 
-  @Cron('0 7 * * *', { timeZone: 'Asia/Kolkata', name: 'daily-generate' })
-  async dailyGenerate() {
-    const envEnabled = this.config.get('CRON_ENABLED') !== 'false';
-    if (!envEnabled) {
-      this.log.log('CRON_ENABLED=false — skipping');
-      return;
+  /** In-process timer — Render keeps this API process running. */
+  @Cron('0 7,9,11,13,15,17,19,21,23,0 * * *', {
+    timeZone: 'Asia/Kolkata',
+    name: 'ist-generate-publish',
+  })
+  async nestSlot() {
+    await this.tick('nest');
+  }
+
+  async tick(source: 'nest' | 'http', force = false) {
+    if (this.config.get('CRON_ENABLED') === 'false') {
+      return { ok: true, skipped: 'CRON_ENABLED=false', source };
+    }
+
+    if (!force && !shouldRunCronSlot()) {
+      return { ok: true, skipped: 'outside_ist_window', source };
     }
 
     const settings = await this.prisma.settings.findFirst();
     if (settings && !settings.cronEnabled) {
-      this.log.log('Settings cronEnabled=false — skipping');
-      return;
+      return { ok: true, skipped: 'settings.cronEnabled=false', source };
     }
 
     try {
       const run = await this.pipeline.startRun('cron');
-      this.log.log(`Cron started run ${run.id}`);
+      this.log.log(`Cron (${source}) started run ${run.id}`);
+      return { ok: true, runId: run.id, source };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`Cron skipped: ${msg}`);
+      this.log.warn(`Cron (${source}) skipped: ${msg}`);
+      return { ok: true, skipped: msg, source };
     }
   }
 }

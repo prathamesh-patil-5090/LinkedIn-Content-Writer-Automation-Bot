@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MediaService } from './media.service';
-import { PixazoService } from './pixazo.service';
+import { DeapiService } from './deapi.service';
 
 @Module({
-  providers: [MediaService, PixazoService],
-  exports: [MediaService, PixazoService],
+  providers: [MediaService, DeapiService],
+  exports: [MediaService, DeapiService],
 })
 export class MediaModule {}

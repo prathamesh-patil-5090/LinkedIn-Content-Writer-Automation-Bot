@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, isUnauthorized } from '@/lib/api';
 import { AppShell } from '@/components/AppShell';
 
 type RunsResponse = {
@@ -19,39 +19,40 @@ type RunsResponse = {
 export default function RunsPage() {
   const router = useRouter();
   const [data, setData] = useState<RunsResponse | null>(null);
+  const [email, setEmail] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
-        await apiFetch('/me');
+        const me = await apiFetch<{ email: string }>('/me');
+        setEmail(me.email);
         const res = await apiFetch<RunsResponse>('/runs');
         setData(res);
-      } catch {
-        router.replace('/login');
+      } catch (err) {
+        if (isUnauthorized(err)) router.replace('/login');
       }
     })();
   }, [router]);
 
   return (
-    <AppShell title="Runs" kicker={data ? `${data.total} total` : 'History'}>
+    <AppShell
+      title="Runs"
+      email={email}
+      kicker={data ? `${data.total} total` : 'History'}
+    >
       {!data?.items.length ? (
-        <section className="panel">
+        <section className="card">
           <p className="muted" style={{ margin: 0 }}>
             No runs yet.
           </p>
         </section>
       ) : (
-        <div style={{ display: 'grid', gap: 10 }}>
+        <div className="list">
           {data.items.map((run) => (
-            <Link
-              key={run.id}
-              href={`/runs/${run.id}`}
-              className="panel"
-              style={{ textDecoration: 'none' }}
-            >
+            <Link key={run.id} href={`/runs/${run.id}`} className="row-link">
               <div className="btn-row" style={{ alignItems: 'center' }}>
                 <span className="pill">{run.status.replaceAll('_', ' ')}</span>
-                <span className="muted" style={{ fontSize: 13 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
                   {new Date(run.createdAt).toLocaleString()}
                 </span>
               </div>

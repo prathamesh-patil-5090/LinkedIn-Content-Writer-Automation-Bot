@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, isUnauthorized } from '@/lib/api';
 import { AppShell } from '@/components/AppShell';
 
 type VoiceSample = {
@@ -22,6 +22,7 @@ export default function VoicePage() {
   const [samples, setSamples] = useState<VoiceSample[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState('');
 
   async function refresh() {
     const list = await apiFetch<VoiceSample[]>('/voice-samples');
@@ -31,10 +32,11 @@ export default function VoicePage() {
   useEffect(() => {
     (async () => {
       try {
-        await apiFetch('/me');
+        const me = await apiFetch<{ email: string }>('/me');
+        setEmail(me.email);
         await refresh();
-      } catch {
-        router.replace('/login');
+      } catch (err) {
+        if (isUnauthorized(err)) router.replace('/login');
       }
     })();
   }, [router]);
@@ -78,14 +80,18 @@ export default function VoicePage() {
   }
 
   return (
-    <AppShell title="Voice bank" kicker={`${samples.length} samples`}>
-      <section className="panel">
+    <AppShell
+      title="Voice"
+      email={email}
+      kicker={`${samples.length} samples in the bank`}
+    >
+      <section className="card stack">
+        <h2>Import</h2>
         <p className="muted" style={{ margin: 0 }}>
-          Import LinkedIn <code>Shares.csv</code> or the data export zip to keep
-          your voice sharp.
+          LinkedIn <code>Shares.csv</code> or the data-export zip.
         </p>
         <label className="field">
-          <span>Import CSV / ZIP</span>
+          <span>CSV / ZIP</span>
           <input
             type="file"
             accept=".csv,.zip,text/csv,application/zip"
@@ -93,44 +99,22 @@ export default function VoicePage() {
             onChange={(e) => void onImport(e.target.files?.[0] || null)}
           />
         </label>
-        {msg ? <p style={{ margin: 0, fontSize: 14 }}>{msg}</p> : null}
+        {msg ? <p style={{ margin: 0 }}>{msg}</p> : null}
       </section>
 
-      <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
+      <div className="list" style={{ marginTop: 16 }}>
         {samples.map((s) => (
-          <article key={s.id} className="panel">
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: 8,
-                flexWrap: 'wrap',
-              }}
-            >
+          <article key={s.id} className="card stack">
+            <div className="btn-row" style={{ justifyContent: 'space-between' }}>
               <strong>{s.title}</strong>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {s.source}
-                {s.isActive ? ' · active' : ' · inactive'}
-              </span>
+              <span className="pill">{s.isActive ? 'active' : 'off'}</span>
             </div>
-            <pre
-              className="muted"
-              style={{
-                whiteSpace: 'pre-wrap',
-                margin: 0,
-                fontFamily: 'inherit',
-                fontSize: 14,
-                lineHeight: 1.45,
-              }}
-            >
+            <p className="muted" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
               {s.body.slice(0, 420)}
               {s.body.length > 420 ? '…' : ''}
-            </pre>
+            </p>
             <div className="btn-row">
-              <button
-                className="btn"
-                onClick={() => void toggle(s.id, s.isActive)}
-              >
+              <button className="btn" onClick={() => void toggle(s.id, s.isActive)}>
                 {s.isActive ? 'Deactivate' : 'Activate'}
               </button>
               <button className="btn danger" onClick={() => void remove(s.id)}>
