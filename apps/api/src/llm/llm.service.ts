@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { extractJson, isJsonModeError } from './json-extract';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
 const BUILTIN_FALLBACKS = [
-  'openai/gpt-oss-20b',
   'openai/gpt-oss-120b',
   'qwen/qwen3.6-27b',
 ];
@@ -42,74 +42,101 @@ export class LlmService {
     let lastError: Error | null = null;
 
     for (const model of models) {
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        await this.throttle();
-        const started = Date.now();
-        try {
-          const res = await fetch(`${base}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+      let skipModel = false;
+      for (const jsonMode of [true, false]) {
+        if (skipModel) break;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          await this.throttle();
+          const started = Date.now();
+          try {
+            const body: Record<string, unknown> = {
               model,
               messages: opts.messages,
-              temperature: opts.temperature ?? 0.55,
-              response_format: { type: 'json_object' },
-            }),
-            signal: AbortSignal.timeout(120_000),
-          });
+              temperature: opts.temperature ?? 0.3,
+            };
+            if (jsonMode) body.response_format = { type: 'json_object' };
 
-          const json = (await res.json()) as {
-            error?: { message?: string; code?: string };
-            model?: string;
-            choices?: Array<{ message?: { content?: string } }>;
-          };
+            const res = await fetch(`${base}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(120_000),
+            });
 
-          if (!res.ok) {
-            const msg = json.error?.message || `Groq HTTP ${res.status}`;
-            const waitSec = parseRetrySeconds(msg);
-            if (waitSec != null && attempt < 3) {
-              this.log.warn(
-                `${model} rate-limited; waiting ${waitSec.toFixed(1)}s (try ${attempt}/3)`,
+            const json = (await res.json()) as {
+              error?: {
+                message?: string;
+                code?: string;
+                failed_generation?: string;
+              };
+              model?: string;
+              choices?: Array<{ message?: { content?: string } }>;
+            };
+
+            if (!res.ok) {
+              const msg = json.error?.message || `Groq HTTP ${res.status}`;
+              const salvage = json.error?.failed_generation;
+              if (salvage) {
+                try {
+                  const data = extractJson(salvage) as T;
+                  this.lastCallAt = Date.now();
+                  this.log.warn(
+                    `${model} JSON mode failed; salvaged failed_generation`,
+                  );
+                  return {
+                    data,
+                    raw: salvage,
+                    model: json.model || model,
+                    latencyMs: Date.now() - started,
+                  };
+                } catch {
+                  /* fall through */
+                }
+              }
+              const waitSec = parseRetrySeconds(msg);
+              if (waitSec != null && attempt < 2) {
+                this.log.warn(
+                  `${model} rate-limited; waiting ${waitSec.toFixed(1)}s`,
+                );
+                await sleep((waitSec + 0.4) * 1000);
+                continue;
+              }
+              throw new Error(`Groq ${model}: ${msg}`);
+            }
+
+            const raw = json.choices?.[0]?.message?.content || '';
+            const data = extractJson(raw) as T;
+            this.lastCallAt = Date.now();
+            if (model !== opts.model || !jsonMode) {
+              this.log.log(
+                `Used Groq ${model}${jsonMode ? '' : ' (plain text JSON)'}`,
               );
+            }
+            return {
+              data,
+              raw,
+              model: json.model || model,
+              latencyMs: Date.now() - started,
+            };
+          } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            const msg = lastError.message;
+            this.log.warn(`LLM model ${model} failed: ${msg}`);
+            if (/does not exist|do not have access|not entitled|too large/i.test(msg)) {
+              skipModel = true;
+              break;
+            }
+            if (isJsonModeError(msg) && jsonMode) break;
+            const waitSec = parseRetrySeconds(msg);
+            if (waitSec != null && attempt < 2) {
               await sleep((waitSec + 0.4) * 1000);
               continue;
             }
-            throw new Error(`Groq ${model}: ${msg}`);
-          }
-
-          const raw = json.choices?.[0]?.message?.content || '';
-          const cleaned = raw
-            .replace(/^```json\s*/i, '')
-            .replace(/^```\s*/i, '')
-            .replace(/\s*```$/i, '')
-            .trim();
-          const data = JSON.parse(cleaned) as T;
-          this.lastCallAt = Date.now();
-          if (model !== opts.model) {
-            this.log.log(`Fell back to Groq model ${model}`);
-          }
-          return {
-            data,
-            raw: cleaned,
-            model: json.model || model,
-            latencyMs: Date.now() - started,
-          };
-        } catch (err) {
-          lastError = err instanceof Error ? err : new Error(String(err));
-          const msg = lastError.message;
-          this.log.warn(`LLM model ${model} failed: ${msg}`);
-          if (/too large|not entitled|failed to validate json/i.test(msg)) {
             break;
           }
-          const waitSec = parseRetrySeconds(msg);
-          if (waitSec != null && attempt < 3) {
-            await sleep((waitSec + 0.4) * 1000);
-            continue;
-          }
-          break;
         }
       }
     }

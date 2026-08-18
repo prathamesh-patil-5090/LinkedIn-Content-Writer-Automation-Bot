@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { GENERATING_STATUSES } from '@ldp/shared';
+import {
+  fallbackBuckets,
+  normalizeBucket,
+  storyBucketsFor,
+  type ContentType,
+} from '@ldp/shared';
 import { PrismaService } from '../prisma/prisma.module';
 import { NewsService } from '../news/news.service';
 import { AgentsService } from '../agents/agents.service';
@@ -8,6 +14,11 @@ import { TelegramService } from '../notifications/telegram.service';
 import { ConfigService } from '@nestjs/config';
 import { LinkedInService } from '../linkedin/linkedin.service';
 import { loadUsedIndex, UsedIndex } from './uniqueness';
+import {
+  contentTypeForHour,
+  cronWindowStatus,
+  startOfIstDay,
+} from '../scheduler/cron-window';
 
 class PipelineCancelledError extends Error {
   constructor() {
@@ -172,8 +183,20 @@ export class PipelineService {
         trend_score?: number;
         prediction_reason?: string;
       };
+      let contentType: ContentType | undefined;
 
       const used = await loadUsedIndex(this.prisma);
+      const runRow = await this.prisma.run.findUnique({
+        where: { id: runId },
+        select: { triggeredBy: true },
+      });
+      if (runRow?.triggeredBy === 'cron') {
+        const securityToday = await this.securityPostedToday();
+        contentType = contentTypeForHour(
+          cronWindowStatus().istHour,
+          securityToday,
+        );
+      }
 
       if (selectedStory) {
         if (used.matchesStory(selectedStory.title, selectedStory.link)) {
@@ -197,7 +220,7 @@ export class PipelineService {
           data: {
             collectedAt: new Date(),
             storyCount: 1,
-            winnerJson: { winner, selected: true },
+            winnerJson: { winner, selected: true, contentType: winner.angle },
           },
         });
         await this.logStep(runId, 'select', winner.title, { winner });
@@ -227,7 +250,7 @@ export class PipelineService {
 
         await this.setStatus(runId, 'researching');
         await this.assertNotCancelled(runId);
-        const research = await this.agents.research(fresh);
+        const research = await this.agents.research(fresh, contentType);
         await this.assertNotCancelled(runId);
         const unusedTop = used.unusedStories(research.data.top_stories);
         if (unusedTop.length === 0) {
@@ -244,31 +267,43 @@ export class PipelineService {
           runId,
           'research',
           unusedTop.slice(0, 3).map((s) => s.title).join('; '),
-          researchData,
+          { ...researchData, contentType },
           research.latencyMs,
         );
 
         await this.setStatus(runId, 'ranking');
         await this.assertNotCancelled(runId);
-        const rank = await this.agents.rank(researchData, used.summary());
+        const rank = await this.agents.rank(
+          researchData,
+          used.summary(),
+          contentType,
+        );
         await this.assertNotCancelled(runId);
-        winner = this.pickUniqueWinner(rank.data, unusedTop, used);
+        winner = this.pickUniqueWinner(rank.data, unusedTop, used, contentType);
         await this.prisma.run.update({
           where: { id: runId },
-          data: { winnerJson: { ...rank.data, winner } },
+          data: {
+            winnerJson: { ...rank.data, winner, contentType: contentType || winner.angle },
+          },
         });
         await this.logStep(
           runId,
           'rank',
-          winner.title,
-          { ...rank.data, winner },
+          `${contentType || winner.angle}: ${winner.title}`,
+          { ...rank.data, winner, contentType },
           rank.latencyMs,
         );
       }
 
       await this.setStatus(runId, 'writing');
       await this.assertNotCancelled(runId);
-      const { voice, drafts } = await this.writeUniquePost(runId, winner, used);
+      const { voice, drafts } = await this.writeUniquePost(
+        runId,
+        winner,
+        used,
+        undefined,
+        contentType || normalizeBucket(winner.angle),
+      );
       await this.assertNotCancelled(runId);
 
       const draft = await this.prisma.draft.create({
@@ -336,6 +371,7 @@ export class PipelineService {
           angle: string;
           trend_score?: number;
         };
+        contentType?: ContentType;
       };
       const winner = winnerJson.winner;
       const version =
@@ -347,6 +383,7 @@ export class PipelineService {
         winner,
         used,
         feedback,
+        winnerJson.contentType || normalizeBucket(winner.angle),
       );
       await this.assertNotCancelled(runId);
 
@@ -454,6 +491,25 @@ export class PipelineService {
     }
   }
 
+  private async securityPostedToday() {
+    const since = startOfIstDay();
+    const runs = await this.prisma.run.findMany({
+      where: {
+        status: 'published',
+        publishedAt: { gte: since },
+      },
+      select: { winnerJson: true },
+    });
+    return runs.some((r) => {
+      const w = r.winnerJson as {
+        contentType?: string;
+        winner?: { angle?: string };
+      } | null;
+      const type = w?.contentType || w?.winner?.angle;
+      return normalizeBucket(type) === 'security-bug';
+    });
+  }
+
   private pickUniqueWinner(
     rank: {
       winner: {
@@ -474,6 +530,7 @@ export class PipelineService {
       trend_score: number;
     }>,
     used: UsedIndex,
+    contentType?: ContentType,
   ) {
     const byTitle = new Map(topStories.map((s) => [s.title, s]));
     const candidates = [
@@ -483,27 +540,47 @@ export class PipelineService {
         .filter((s): s is (typeof topStories)[number] => Boolean(s)),
       ...topStories,
     ];
-    const seen = new Set<string>();
-    for (const c of candidates) {
-      const key = `${c.link}|${c.title}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (used.matchesStory(c.title, c.link)) continue;
-      return {
-        title: c.title,
-        link: c.link,
-        why_it_matters: c.why_it_matters,
-        angle: c.angle,
-        trend_score: 'trend_score' in c ? c.trend_score : rank.winner.trend_score,
-        prediction_reason:
-          'prediction_reason' in c && c.prediction_reason
-            ? String(c.prediction_reason)
-            : 'Unique unused story',
-      };
+    const preferred = contentType
+      ? storyBucketsFor(contentType)
+      : undefined;
+    const fallback = contentType
+      ? fallbackBuckets(contentType)
+      : undefined;
+
+    const pickFrom = (allow: string[] | undefined) => {
+      const seen = new Set<string>();
+      for (const c of candidates) {
+        const key = `${c.link}|${c.title}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (used.matchesStory(c.title, c.link)) continue;
+        if (allow && !allow.includes(normalizeBucket(c.angle))) continue;
+        return {
+          title: c.title,
+          link: c.link,
+          why_it_matters: c.why_it_matters,
+          angle: c.angle,
+          trend_score:
+            'trend_score' in c ? c.trend_score : rank.winner.trend_score,
+          prediction_reason:
+            'prediction_reason' in c && c.prediction_reason
+              ? String(c.prediction_reason)
+              : contentType
+                ? `Unique unused ${contentType} story`
+                : 'Unique unused story',
+        };
+      }
+      return null;
+    };
+
+    const hit =
+      pickFrom(preferred) || pickFrom(fallback) || pickFrom(undefined);
+    if (!hit) {
+      throw new Error(
+        'No unused story left to post — all ranked candidates were already used',
+      );
     }
-    throw new Error(
-      'No unused story left to post — all ranked candidates were already used',
-    );
+    return hit;
   }
 
   private async writeUniquePost(
@@ -518,8 +595,13 @@ export class PipelineService {
     },
     used: UsedIndex,
     feedback?: string,
+    contentType?: ContentType,
   ) {
-    const drafts = await this.agents.writeDrafts(winner, { hooks: used.hooks });
+    const drafts = await this.agents.writeDrafts(
+      winner,
+      { hooks: used.hooks },
+      contentType,
+    );
     await this.logStep(runId, 'content', '2 essay drafts', drafts.data, drafts.latencyMs);
 
     const samples = await this.activeSamples();

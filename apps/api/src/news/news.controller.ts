@@ -4,6 +4,7 @@ import { NewsService } from './news.service';
 import { AgentsService } from '../agents/agents.service';
 import { PrismaService } from '../prisma/prisma.module';
 import { loadUsedIndex } from '../pipeline/uniqueness';
+import { normalizeBucket } from '@ldp/shared';
 
 @Controller('news')
 @UseGuards(SessionAuthGuard)
@@ -44,12 +45,30 @@ export class NewsController {
     if (used.matchesStory(suggested.title, suggested.link)) {
       suggested = top[0];
     }
-    const storiesWithFlag = top.map((s) => ({
-      ...s,
-      suggested:
-        s.title === suggested.title ||
-        s.link === suggested.link,
-    }));
+    const nonSec = top.find(
+      (s) =>
+        normalizeBucket(s.angle) !== 'security-bug' &&
+        !used.matchesStory(s.title, s.link),
+    );
+    if (
+      nonSec &&
+      normalizeBucket(suggested.angle) === 'security-bug'
+    ) {
+      suggested = nonSec;
+    }
+    let marked = false;
+    const storiesWithFlag = top.map((s) => {
+      const isSuggested =
+        !marked &&
+        ((suggested.link && s.link === suggested.link) ||
+          (!suggested.link && s.title === suggested.title));
+      if (isSuggested) marked = true;
+      return {
+        ...s,
+        angle: s.angle || normalizeBucket(s.angle),
+        suggested: isSuggested,
+      };
+    });
 
     // Ensure suggested is first if present in list, else prepend
     const hasSuggested = storiesWithFlag.some((s) => s.suggested);
