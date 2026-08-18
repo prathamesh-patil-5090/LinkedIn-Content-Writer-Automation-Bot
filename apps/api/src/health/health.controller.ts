@@ -4,7 +4,10 @@ import { PrismaService } from '../prisma/prisma.module';
 import { TelegramService } from '../notifications/telegram.service';
 import { MediaService } from '../media/media.service';
 import { LinkedInService } from '../linkedin/linkedin.service';
-import { cronWindowStatus } from '../scheduler/cron-window';
+import {
+  contentTypeForHour,
+  cronWindowStatus,
+} from '../scheduler/cron-window';
 
 const startedAt = Date.now();
 
@@ -57,6 +60,7 @@ export class HealthController {
         enabled: this.config.get('CRON_ENABLED') !== 'false',
         autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
         ...cronWindowStatus(),
+        nextType: contentTypeForHour(cronWindowStatus().istHour, false),
       },
     };
   }

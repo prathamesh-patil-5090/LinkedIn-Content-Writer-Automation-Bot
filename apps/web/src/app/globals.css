@@ -352,21 +352,45 @@ button, input, textarea, select { font: inherit; color: inherit; }
   box-shadow: inset 0 0 0 3px var(--accent);
 }
 
-.story-card:hover { border-color: #3a3f4c; }
+.story-card:hover { border-color: #3d424e; }
 .story-card.selected { border-color: var(--accent); background: #171a2a; }
-.story-card.suggested { box-shadow: inset 2px 0 0 var(--accent); }
 .story-card strong { display: block; font-size: 13.5px; letter-spacing: -0.01em; margin-bottom: 4px; }
 .story-meta { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 
 .badge-suggest {
   display: inline-flex;
-  margin-top: 8px;
+  margin: 0;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--accent-2);
 }
+
+.story-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.type-pill {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #22263a;
+  color: var(--muted);
+}
+
+.type-pill.type-js-lib { background: #1a2a3a; color: #7ec8e3; }
+.type-pill.type-ai-devtools { background: #1e1a33; color: #b9a7ff; }
+.type-pill.type-security-bug { background: #2a1a1a; color: #e8a0a0; }
+.type-pill.type-dev-tool { background: #1a2a22; color: #8fd4b8; }
 
 .draft-image {
   width: 100%;

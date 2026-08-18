@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, isUnauthorized } from '@/lib/api';
 import { AppShell } from '@/components/AppShell';
+import {
+  CONTENT_TYPE_LABELS,
+  normalizeBucket,
+  type ContentType,
+} from '@ldp/shared';
 
 type Me = { id: string; email: string; linkedinConnected: boolean };
 type Story = {
@@ -357,12 +362,15 @@ export default function TodayPage() {
               {stories.length ? (
                 <div className="story-list">
                   {stories.map((s) => {
-                    const isSelected =
-                      selected?.link === s.link || selected?.title === s.title;
+                    const isSelected = selected
+                      ? selected.link && s.link
+                        ? selected.link === s.link
+                        : selected.title === s.title
+                      : false;
                     return (
                       <label
                         key={`${s.link}-${s.title}`}
-                        className={`story-card ${isSelected ? 'selected' : ''} ${s.suggested ? 'suggested' : ''}`}
+                        className={`story-card ${isSelected ? 'selected' : ''}`}
                       >
                         <input
                           type="radio"
@@ -375,9 +383,17 @@ export default function TodayPage() {
                           <div className="story-meta">
                             {s.why_it_matters || s.angle || s.link}
                           </div>
-                          {s.suggested ? (
-                            <span className="badge-suggest">Suggested</span>
-                          ) : null}
+                          <div className="story-tags">
+                            {s.angle ? (
+                              <span className={`type-pill type-${normalizeBucket(s.angle)}`}>
+                                {CONTENT_TYPE_LABELS[normalizeBucket(s.angle) as ContentType] ||
+                                  s.angle}
+                              </span>
+                            ) : null}
+                            {s.suggested ? (
+                              <span className="badge-suggest">Suggested</span>
+                            ) : null}
+                          </div>
                         </div>
                       </label>
                     );
