@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { LlmService } from '../llm/llm.service';
 import type { CollectedStory } from '../news/news.service';
 import { VoiceOutputSchema } from '@ldp/shared';
+import type { ContentType } from '@ldp/shared';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -64,17 +65,20 @@ export class AgentsService {
     }
   }
 
-  async research(stories: CollectedStory[]) {
+  async research(stories: CollectedStory[], required?: ContentType) {
     const model = this.model(
       'LLM_RESEARCH_MODEL',
       'openai/gpt-oss-20b',
     );
-    const compact = stories.slice(0, 15).map((s) => ({
+    const compact = stories.slice(0, 18).map((s) => ({
       title: s.title.slice(0, 140),
       link: s.link,
       source: s.source,
       blurb: s.summary.slice(0, 160),
     }));
+    const mixRule = required
+      ? `This run's content type is "${required}". Label every story with a honest angle (js-lib|ai-devtools|security-bug|dev-tool). Prefer stories that fit "${required}" (howto/architecture use js-lib, ai-devtools, or dev-tool — not CVEs). Still return a mixed top 10 so we have fallbacks.`
+      : `Return a MIXED top 10: at least 3 js-lib, 2 ai-devtools, at most 3 security-bug.`;
     const result = await this.llm.chatJson<z.infer<typeof TopStoriesSchema>>({
       model,
       messages: [
@@ -82,19 +86,23 @@ export class AgentsService {
           role: 'system',
           content: `You are a research analyst picking LinkedIn news for a JavaScript / AI-builder developer (Prathamesh Patil).
 
-Return TOP 10 stories ONLY from these buckets (priority order):
-1. JavaScript/TypeScript libraries, npm packages, React/Next/Node tooling, framework releases
-2. New AI tools for developers (coding agents, Copilot/Claude/Cursor-style tools, RAG/LLM SDKs, AI APIs for builders)
-3. Security: new bugs, CVEs, exploits, supply-chain attacks, patches developers should know
-4. Other concrete developer tooling (APIs, CLIs, open-source releases) if space remains
+Return TOP 10 stories from these buckets:
+1. JavaScript/TypeScript libraries, npm packages, React/Next/Node tooling, framework releases (angle: js-lib)
+2. New AI tools for developers — coding agents, LLM SDKs, builder workflows (angle: ai-devtools)
+3. Security: new bugs, CVEs, exploits, supply-chain attacks JS/Node developers should act on (angle: security-bug)
+4. Other concrete developer tooling (angle: dev-tool)
+
+${mixRule}
 
 HARD REJECT:
-- Podcasts / "listen to this episode" (unless the title is itself a concrete release/CVE)
+- Podcasts / "listen to this episode"
 - Funding, valuations, acquisitions with no builder takeaway
-- Non-JS language cheerleading with no library/tool news (e.g. pure "Go is great" essays)
+- Non-JS language cheerleading with no library/tool news
 - Celebrity AI hype, consumer gadgets, crypto speculation, politics
+- Generic WordPress/SAP/Log4j roundups with no JS takeaway
+- "Subscribe to patch alerts" filler with no specific new bug
 
-why_it_matters must say what a JS/AI developer can DO with this (upgrade, migrate, patch, try a tool).
+why_it_matters must say what a JS/AI developer can DO (upgrade, migrate, try a tool, learn a pattern).
 
 Return ONLY valid JSON:
 {"top_stories":[{"rank":1,"title":"","link":"","why_it_matters":"","trend_score":1-10,"angle":"js-lib|ai-devtools|security-bug|dev-tool"}]}`,
@@ -112,12 +120,21 @@ Return ONLY valid JSON:
   async rank(
     topStories: z.infer<typeof TopStoriesSchema>,
     used?: Array<{ title: string; link: string }>,
+    required?: ContentType,
   ) {
     const model = this.model('LLM_RANK_MODEL', 'openai/gpt-oss-20b');
     const usedBlock =
       used && used.length
         ? `\n\nALREADY USED — never pick these titles or links:\n${JSON.stringify(used)}`
         : '';
+    const typeRule = required
+      ? `Required content type for this slot: "${required}".
+- security-bug: pick a JS/Node-relevant CVE/supply-chain story only
+- js-lib: a library/framework/npm/Node/React release — NEVER a CVE
+- ai-devtools: an AI coding tool / LLM SDK — NEVER a CVE
+- howto / architecture: pick a js-lib, ai-devtools, or dev-tool story (not a CVE) that can teach a pattern or tradeoff
+If the required bucket is empty, fall back js-lib → ai-devtools → dev-tool. Never fill a non-security slot with a CVE.`
+      : `Prefer unused js-lib or ai-devtools over another CVE if several security stories already sit in the list.`;
     const result = await this.llm.chatJson<z.infer<typeof RankSchema>>({
       model,
       messages: [
@@ -125,17 +142,13 @@ Return ONLY valid JSON:
           role: 'system',
           content: `You rank ONE LinkedIn story for a JavaScript + AI-tools developer.
 
-Prefer in this order:
-1. New/updated JS/TS libraries or npm ecosystem news
-2. New AI developer tools (coding agents, LLM SDKs, builder workflows)
-3. Fresh security bugs / CVEs / supply-chain issues developers should act on
-4. Other sharp developer-tooling news
+${typeRule}
 
-Reject podcasts, funding headlines, and vague essays.
+Reject podcasts, funding headlines, vague essays, and generic vuln roundups with no JS action.
 The winner MUST be a story that has not been posted before (see already-used list).
 
 Return ONLY valid JSON:
-{"winner":{"title":"","link":"","why_it_matters":"","trend_score":1-10,"angle":"","prediction_reason":""},"runners_up":[{"title":"","reason_skipped":""}]}`,
+{"winner":{"title":"","link":"","why_it_matters":"","trend_score":1-10,"angle":"js-lib|ai-devtools|security-bug|dev-tool","prediction_reason":""},"runners_up":[{"title":"","reason_skipped":""}]}`,
         },
         {
           role: 'user',
@@ -149,8 +162,27 @@ Return ONLY valid JSON:
   async writeDrafts(
     winner: z.infer<typeof RankSchema>['winner'],
     avoid?: { hooks: string[] },
+    contentType?: ContentType,
   ) {
     const model = this.model('LLM_CONTENT_MODEL', 'openai/gpt-oss-20b');
+    const styles =
+      contentType === 'howto'
+        ? `Styles:
+1. teach_essay — walk through a concrete pattern a JS/AI builder can try this week, using the story as the hook
+2. operator_essay — what happened, why it matters, what to do`
+        : contentType === 'architecture'
+          ? `Styles:
+1. tradeoff_essay — the design choice / tradeoff this story exposes, and when you'd pick which side
+2. journey_essay — same facts as a builder lesson`
+          : `Styles:
+1. operator_essay — what happened, why it matters to developers, what to do
+2. journey_essay — same facts, but framed as a builder lesson / experience`;
+    const styleJson =
+      contentType === 'howto'
+        ? '{"drafts":[{"style":"teach_essay","hook":"","body":""},{"style":"operator_essay","hook":"","body":""}]}'
+        : contentType === 'architecture'
+          ? '{"drafts":[{"style":"tradeoff_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}'
+          : '{"drafts":[{"style":"operator_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}';
     const result = await this.llm.chatJson<z.infer<typeof ContentSchema>>({
       model,
       messages: [
@@ -160,9 +192,7 @@ Return ONLY valid JSON:
 
 Write TWO drafts for the winning story. Each draft body is exactly TWO long paragraphs (not bullets, not one-liners).
 
-Styles:
-1. operator_essay — what happened, why it matters to developers, what to do
-2. journey_essay — same facts, but framed as a builder lesson / experience
+${styles}
 
 Rules:
 - Hook: one short sentence (stored in "hook", also used as the first line of the post)
@@ -178,7 +208,7 @@ Rules:
 - This story has not been posted yet. Write a fresh take, not a recap of an earlier post.
 
 Return ONLY JSON:
-{"drafts":[{"style":"operator_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}`,
+${styleJson}`,
         },
         {
           role: 'user',

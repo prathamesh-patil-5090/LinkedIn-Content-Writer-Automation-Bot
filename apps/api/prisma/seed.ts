@@ -70,6 +70,14 @@ const DEFAULT_SOURCES = [
     name: 'Cloudflare Blog',
     rssUrl: 'https://blog.cloudflare.com/rss/',
   },
+  {
+    name: 'React Blog',
+    rssUrl: 'https://react.dev/rss.xml',
+  },
+  {
+    name: 'Node.js Blog',
+    rssUrl: 'https://nodejs.org/en/feed/blog.xml',
+  },
 ];
 
 const DEACTIVATE_URLS = [
