@@ -598,10 +598,21 @@ export class PipelineService {
       const result = await this.linkedin.publishPendingRun(runId);
       await this.logStep(runId, 'publish', result.urn || 'published', result);
       this.log.log(`Auto-published run ${runId}`);
-      const w = run.winnerJson as { winner?: { title?: string } } | null;
+      const w = run.winnerJson as {
+        winner?: { title?: string; link?: string };
+      } | null;
       const appUrl = this.config.get('APP_URL') || 'http://localhost:3000';
+      const title = w?.winner?.title || runId;
+      const article = w?.winner?.link?.trim();
       await this.telegram.ping(
-        `Published to LinkedIn (cron).\n${w?.winner?.title || runId}\n${appUrl}`,
+        [
+          'Published to LinkedIn (cron).',
+          title,
+          article ? `Article: ${article}` : null,
+          appUrl,
+        ]
+          .filter(Boolean)
+          .join('\n'),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -644,8 +655,25 @@ export class PipelineService {
 
   private async notifyDraftReady(runId: string) {
     const appUrl = this.config.get('APP_URL') || 'http://localhost:3000';
+    const draft = await this.prisma.draft.findFirst({
+      where: { runId },
+      orderBy: { version: 'desc' },
+      select: { sourceTitle: true, sourceLink: true, hook: true },
+    });
+    const title = draft?.sourceTitle?.trim();
+    const article = draft?.sourceLink?.trim();
+    const hook = draft?.hook?.trim();
     await this.telegram.ping(
-      `LinkedIn draft ready.\nOpen: ${appUrl}\nRun: ${runId}`,
+      [
+        'LinkedIn draft ready.',
+        title ? title : null,
+        hook ? hook : null,
+        article ? `Article: ${article}` : null,
+        `Open: ${appUrl}`,
+        `Run: ${runId}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
     );
   }
 }
