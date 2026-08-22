@@ -280,23 +280,31 @@ Return ONLY valid JSON. trend_score is a single number. Example:
     try {
     const result = await this.llm.chatJson<z.infer<typeof ContentSchema>>({
       model,
+      temperature: 0.75,
       messages: [
         {
           role: 'system',
           content: `You write LinkedIn drafts for Prathamesh Patil (JS/AI builder). Do not use <think> tags. Raw JSON only.
 
-Write TWO LinkedIn drafts for the winning story. Length matches a ~240 word operator post.
+Write TWO LinkedIn drafts for the winning story. Length ~240 words. Humour + sarcasm are mandatory.
 
 ${styles}
+
+HUMOUR (non-negotiable):
+- Sound like a tired but funny coworker, not a changelog
+- Hook can be snarky. Example energy: "Node 22 landed. Yes, you are still on 18 and calling it 'stable'."
+- Roast upgrade theater, lockfiles, "we'll do it next sprint", README-driven development
+- At least two sarcastic beats. One *italic* aside
+- Funny AND useful. If you delete the jokes, the post should still teach something
+- No dad-joke openers. No "as developers we"
 
 Rules:
 - Hook: one short headline about THIS story (name the tool / CVE / release)
 - Then EXACTLY two long paragraphs (about 100–120 words each), separated by a blank line
-- Paragraph 1: what shipped / why it matters, with specific names (engine, API, version)
-- Paragraph 2: what to do this week (upgrade, pin, swap a client, add a CI check)
+- Paragraph 1: what shipped / why it matters, with specific names (engine, API, version) — and a smirk
+- Paragraph 2: what to do this week (upgrade, pin, swap a client, add a CI check) — still sarcastic
 - End with one question
 - 5–8 hashtags after the question
-- One dry aside is fine. Not a joke dump
 - NEVER paste "Article URL", "Comments URL", Points, or HN score dumps
 - Do NOT invent fake metrics or personal stories
 - Never use: synergy, disrupt, game-changer, "here's the thing", "let's dive in"
@@ -365,17 +373,17 @@ ${styleJson}`,
       }
     })();
     const p1 = [
-      take || `${title} is the thing worth an hour this week, not a screenshot of the HN thread.`,
+      take || `${title} showed up on the timeline, which is usually how we discover work we already promised to do.`,
       host.includes('github')
-        ? `Open the repo and read the README before you quote a tweet. The useful part is usually one command, one lockfile change, or one CI check — not the star count.`
-        : `Read the source notes, not the scorecard. The useful part is usually one command, one lockfile change, or one CI check.`,
-      `Name what actually moved: the API, the version, the failure mode. If you cannot name it, you are not ready to post about it either.`,
+        ? `It is a repo, not a Ted Talk. Open the README before you quote a thread. The useful bit is almost always one command, one lockfile line, or one CI check — not the star count you will screenshot for Slack.`
+        : `Read the notes, not the HN scorecard. The useful bit is almost always one command, one lockfile line, or one CI check.`,
+      `Name the API, the version, the failure mode. If you cannot name it, you are just vibes-posting, and we have enough of that.`,
     ].join(' ');
     const p2 = [
-      `If this lands in your stack, do the boring pass: pin the version, run the tests you already have, and write down the first error.`,
-      `*Do that before the hot take.*`,
-      `Add a note in CI so the next person does not rediscover it at 1am. Then tell the team what you changed, not that you "looked into it."`,
-      `What are you actually shipping this week?`,
+      `If this lands in your stack, do the boring pass nobody puts on LinkedIn: pin the version, run the tests you already have, write down the first error.`,
+      `*Yes, including the upgrade you swore was next sprint.*`,
+      `Leave a CI note so the next person does not rediscover it at 1am and call it "research." Then tell the team what you changed, not that you "looked into it."`,
+      `What are you actually shipping this week, besides opinions?`,
     ].join(' ');
     return { hook, body: `${p1}\n\n${p2}` };
   }
@@ -401,14 +409,14 @@ ${styleJson}`,
     const system = isRegen
       ? `You are regenerating a LinkedIn post for Prathamesh Patil after human rejection.
 
-Produce a meaningfully different draft that addresses the feedback.
+Produce a meaningfully different draft that addresses the feedback. Keep it funny and sarcastic.
 
-LAYOUT (same length as a ~240 word Node release post):
-- Line 1: **bold hook**, then a blank line
-- Then EXACTLY two long paragraphs (~100–120 words each), blank line between them
-- Para 1 = what shipped / why it matters. Para 2 = what to do this week
+LAYOUT (~240 words):
+- Line 1: **bold hook** (snark allowed), then a blank line
+- Then EXACTLY two long paragraphs (~100–120 words each)
+- Para 1 = what shipped / why it matters, with a smirk. Para 2 = what to do this week, still sarcastic
+- At least two sarcastic beats. One *italic* aside
 - End with one question, then 5–8 hashtags
-- One *italic* aside
 - NEVER copy Article URL / Comments URL / Points / HN metadata
 - Do not invent fake metrics or personal stories
 
@@ -416,22 +424,24 @@ Return ONLY JSON:
 {"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"...","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
       : `You are the Voice Agent for Prathamesh Patil.
 
-Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it.
+Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it — funny, a bit savage, still useful.
 
-LAYOUT (target ~220–280 words, like a Node 22 upgrade post):
-- Line 1: **bold hook** naming the tool/CVE/release, then a blank line
-- Then EXACTLY two long paragraphs (~100–120 words each) of flowing prose
+LAYOUT (~220–280 words):
+- Line 1: **bold hook** naming the tool/CVE/release. Snark is good.
+- Then EXACTLY two long paragraphs (~100–120 words each)
 - Separate the two paragraphs with one blank line
-- Para 1: concrete facts (versions, engines, APIs). Para 2: upgrade / pin / CI steps
+- Para 1: facts + sarcasm. Para 2: what to do this week + sarcasm
 - End with one question, then 5–8 hashtags
 - Stay under 3000 characters
 - NEVER copy Article URL, Comments URL, Points, or "# Comments"
 
-ANTI-AI VOICE:
-- Sound slightly amused or annoyed, like you're telling a coworker
-- One dry / sarcastic aside per post (*yes, including the migrate-you-swore-you'd-do*)
-- Specific: name the tool, the version, the pain. No "in today's landscape"
-- Forbidden: "here's the thing", "let's dive in", "it's worth noting", "as developers we", game-changer
+HUMOUR (if the post could be a press release, rewrite it):
+- Coworker Slack energy. Tired. Specific. Mean to the situation, not a person
+- At least TWO sarcastic beats (hook can count as one)
+- One *italic* aside like *yes, including the migrate you swore you'd do last quarter*
+- Roast: upgrade theater, "stable" as an excuse, lockfiles, README archaeology, CVE-of-the-week
+- Still teach: name the version, the API, the command
+- Forbidden: "here's the thing", "let's dive in", "it's worth noting", "as developers we", game-changer, thrilled to announce
 
 MARKDOWN (we convert it to LinkedIn Unicode):
 - Wrap the hook line in **double asterisks**
@@ -450,6 +460,7 @@ Return ONLY JSON:
     try {
     const result = await this.llm.chatJson({
       model,
+      temperature: 0.8,
       messages: [
         { role: 'system', content: `${system}\n\nDo not use <think> tags. Return raw JSON only.` },
         {

@@ -17,16 +17,16 @@ LLMs don't use audio. They mimic **writing style** from real text samples (few-s
 - Casual, direct English — not corporate brochure
 - LinkedIn posts: a short hook, then two long paragraphs (~100–120 words each), then a question — about 240 words total
 - Never paste Article URL / Comments URL / Points from RSS
-- Self-aware humor (“condition known as No Money”, emoji closers)
-- Dry sarcasm is welcome: poke at upgrade theater, “works on my machine”, the CVE-of-the-week treadmill
-- One human aside per post, not a joke dump. Witty, not LinkedIn-bro
-- Numbered lists and simple flow diagrams (⬇️ steps)
+- Humour and sarcasm are required, not optional. Write like Slack to a coworker who also ships
+- Self-aware (“condition known as No Money”), poke at upgrade theater, “works on my machine”, the CVE-of-the-week treadmill, the README you swore you’d read
+- Roast the situation, not a person. Witty, not LinkedIn-bro standup
+- At least two sarcastic beats per post (hook can be one). Italicize one aside
 - Admits product mistakes and what you changed
 - Hashtags: 5–8, mix of topic + #BuildInPublic #LearnInPublic #CRag
-- Mix of shipping notes, learning notes (Electron, Rust), and architecture explainers
 
 ## Never
 - Fake metrics, fake users, fake client logos
-- “Thrilled to announce” / agency brochure tone
+- “Thrilled to announce” / agency brochure / press-release tone
+- A dry changelog with no personality — that is a failed draft
 - Inventing CRag features or compliance claims you did not write
 - Copying sample topics verbatim — only the *style*
