@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { LlmService } from '../llm/llm.service';
 import type { CollectedStory } from '../news/news.service';
+import { cleanStoryBlurb, isHnMetadata } from '../news/hn-item';
 import { VoiceOutputSchema } from '@ldp/shared';
-import type { ContentType } from '@ldp/shared';
+import { normalizeBucket, type ContentType } from '@ldp/shared';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -47,6 +48,8 @@ const ContentSchema = z.object({
 
 @Injectable()
 export class AgentsService {
+  private readonly log = new Logger(AgentsService.name);
+
   constructor(
     private readonly llm: LlmService,
     private readonly config: ConfigService,
@@ -74,47 +77,55 @@ export class AgentsService {
       title: s.title.slice(0, 140),
       link: s.link,
       source: s.source,
-      blurb: s.summary.slice(0, 160),
+      blurb: cleanStoryBlurb(s.title, s.summary).slice(0, 160),
     }));
     const mixRule = required
-      ? `This run's content type is "${required}". Label every story with a honest angle (js-lib|ai-devtools|security-bug|dev-tool). Prefer stories that fit "${required}" (howto/architecture use js-lib, ai-devtools, or dev-tool — not CVEs). Still return a mixed top 10 so we have fallbacks.`
-      : `Return a MIXED top 10: at least 3 js-lib, 2 ai-devtools, at most 3 security-bug.`;
-    const result = await this.llm.chatJson<z.infer<typeof TopStoriesSchema>>({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a research analyst picking LinkedIn news for a JavaScript / AI-builder developer (Prathamesh Patil).
+      ? `This run's content type is "${required}". Label every story with a honest angle (js-lib, ai-devtools, security-bug, or dev-tool). Prefer stories that fit "${required}". Still return a mixed top 8 so we have fallbacks.`
+      : `Return a MIXED top 8: at least 3 js-lib, 2 ai-devtools, at most 2 security-bug.`;
+    try {
+      const result = await this.llm.chatJson<z.infer<typeof TopStoriesSchema>>({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: `You pick LinkedIn news for a JavaScript / AI-builder developer.
 
-Return TOP 10 stories from these buckets:
-1. JavaScript/TypeScript libraries, npm packages, React/Next/Node tooling, framework releases (angle: js-lib)
-2. New AI tools for developers — coding agents, LLM SDKs, builder workflows (angle: ai-devtools)
-3. Security: new bugs, CVEs, exploits, supply-chain attacks JS/Node developers should act on (angle: security-bug)
-4. Other concrete developer tooling (angle: dev-tool)
+Pick TOP 8 stories:
+1. JS/TS libraries, npm, React/Next/Node (angle must be exactly "js-lib")
+2. AI coding tools / LLM SDKs (angle must be exactly "ai-devtools")
+3. JS/Node CVEs and supply-chain bugs (angle must be exactly "security-bug")
+4. Other concrete dev tools (angle must be exactly "dev-tool")
 
 ${mixRule}
 
-HARD REJECT:
-- Podcasts / "listen to this episode"
-- Funding, valuations, acquisitions with no builder takeaway
-- Non-JS language cheerleading with no library/tool news
-- Celebrity AI hype, consumer gadgets, crypto speculation, politics
-- Generic WordPress/SAP/Log4j roundups with no JS takeaway
-- "Subscribe to patch alerts" filler with no specific new bug
+Reject podcasts, funding, politics, and generic vuln roundups.
 
-why_it_matters must say what a JS/AI developer can DO (upgrade, migrate, try a tool, learn a pattern).
+why_it_matters: one short sentence, what a developer should DO.
 
-Return ONLY valid JSON:
-{"top_stories":[{"rank":1,"title":"","link":"","why_it_matters":"","trend_score":1-10,"angle":"js-lib|ai-devtools|security-bug|dev-tool"}]}`,
-        },
-        {
-          role: 'user',
-          content: `Pick top 10 from these ${compact.length} stories:\n${JSON.stringify(compact)}`,
-        },
-      ],
-    });
-    const parsed = TopStoriesSchema.parse(result.data);
-    return { ...result, data: parsed };
+Return ONLY valid JSON. trend_score is a single number 1 to 10. Example:
+{"top_stories":[{"rank":1,"title":"Node 22 ships","link":"https://example.com","why_it_matters":"Upgrade Node for the new baseline.","trend_score":8,"angle":"js-lib"}]}`,
+          },
+          {
+            role: 'user',
+            content: `Pick top 8 from these ${compact.length} stories:\n${JSON.stringify(compact)}`,
+          },
+        ],
+      });
+      const parsed = TopStoriesSchema.parse(result.data);
+      if (parsed.top_stories.length) return { ...result, data: parsed };
+    } catch (err) {
+      this.log.warn(
+        `Research LLM failed, using heuristic list: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+    return {
+      data: this.heuristicTop(stories, required),
+      raw: '',
+      model: 'heuristic',
+      latencyMs: 0,
+    };
   }
 
   async rank(
@@ -135,28 +146,111 @@ Return ONLY valid JSON:
 - howto / architecture: pick a js-lib, ai-devtools, or dev-tool story (not a CVE) that can teach a pattern or tradeoff
 If the required bucket is empty, fall back js-lib → ai-devtools → dev-tool. Never fill a non-security slot with a CVE.`
       : `Prefer unused js-lib or ai-devtools over another CVE if several security stories already sit in the list.`;
-    const result = await this.llm.chatJson<z.infer<typeof RankSchema>>({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: `You rank ONE LinkedIn story for a JavaScript + AI-tools developer.
+    try {
+      const result = await this.llm.chatJson<z.infer<typeof RankSchema>>({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: `You rank ONE LinkedIn story for a JavaScript + AI-tools developer.
 
 ${typeRule}
 
 Reject podcasts, funding headlines, vague essays, and generic vuln roundups with no JS action.
 The winner MUST be a story that has not been posted before (see already-used list).
 
-Return ONLY valid JSON:
-{"winner":{"title":"","link":"","why_it_matters":"","trend_score":1-10,"angle":"js-lib|ai-devtools|security-bug|dev-tool","prediction_reason":""},"runners_up":[{"title":"","reason_skipped":""}]}`,
+Return ONLY valid JSON. trend_score is a single number. Example:
+{"winner":{"title":"Node 22 ships","link":"https://example.com","why_it_matters":"Upgrade Node.","trend_score":8,"angle":"js-lib","prediction_reason":"Fresh JS release"},"runners_up":[{"title":"Other","reason_skipped":"weaker takeaway"}]}`,
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(topStories) + usedBlock,
+          },
+        ],
+      });
+      return { ...result, data: RankSchema.parse(result.data) };
+    } catch (err) {
+      this.log.warn(
+        `Rank LLM failed, using first unused story: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+      const winner = topStories.top_stories[0];
+      if (!winner) throw err;
+      return {
+        data: {
+          winner: {
+            title: winner.title,
+            link: winner.link,
+            why_it_matters: winner.why_it_matters,
+            trend_score: winner.trend_score,
+            angle: winner.angle,
+            prediction_reason: 'heuristic fallback',
+          },
+          runners_up: topStories.top_stories.slice(1, 4).map((s) => ({
+            title: s.title,
+            reason_skipped: 'heuristic',
+          })),
         },
-        {
-          role: 'user',
-          content: JSON.stringify(topStories) + usedBlock,
-        },
-      ],
+        raw: '',
+        model: 'heuristic',
+        latencyMs: 0,
+      };
+    }
+  }
+
+  private heuristicTop(
+    stories: CollectedStory[],
+    required?: ContentType,
+  ): z.infer<typeof TopStoriesSchema> {
+    const labeled = stories.map((s) => {
+      const blob = `${s.title} ${s.summary} ${s.source}`;
+      const angle = normalizeBucket(blob);
+      return {
+        title: s.title,
+        link: s.link,
+        why_it_matters: cleanStoryBlurb(s.title, s.summary),
+        trend_score: Math.min(10, Math.max(1, Math.round((s.relevance ?? 4) / 2))),
+        angle,
+      };
     });
-    return { ...result, data: RankSchema.parse(result.data) };
+
+    const want = required
+      ? required === 'security-bug'
+        ? ['security-bug']
+        : required === 'js-lib'
+          ? ['js-lib']
+          : required === 'ai-devtools'
+            ? ['ai-devtools']
+            : ['js-lib', 'ai-devtools', 'dev-tool']
+      : ['js-lib', 'ai-devtools', 'dev-tool', 'security-bug'];
+
+    const picked: typeof labeled = [];
+    const used = new Set<string>();
+    for (const angle of want) {
+      for (const s of labeled) {
+        if (s.angle !== angle || used.has(s.link)) continue;
+        if (angle === 'security-bug' && picked.filter((p) => p.angle === angle).length >= 2) {
+          continue;
+        }
+        used.add(s.link);
+        picked.push(s);
+        if (picked.length >= 8) break;
+      }
+      if (picked.length >= 8) break;
+    }
+    if (picked.length < 8) {
+      for (const s of labeled) {
+        if (used.has(s.link)) continue;
+        used.add(s.link);
+        picked.push(s);
+        if (picked.length >= 8) break;
+      }
+    }
+
+    return {
+      top_stories: picked.map((s, i) => ({ ...s, rank: i + 1 })),
+    };
   }
 
   async writeDrafts(
@@ -183,29 +277,29 @@ Return ONLY valid JSON:
         : contentType === 'architecture'
           ? '{"drafts":[{"style":"tradeoff_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}'
           : '{"drafts":[{"style":"operator_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}';
+    try {
     const result = await this.llm.chatJson<z.infer<typeof ContentSchema>>({
       model,
       messages: [
         {
           role: 'system',
-          content: `You write LinkedIn drafts for Prathamesh Patil (JS/AI builder).
+          content: `You write LinkedIn drafts for Prathamesh Patil (JS/AI builder). Do not use <think> tags. Raw JSON only.
 
-Write TWO drafts for the winning story. Each draft body is exactly TWO long paragraphs (not bullets, not one-liners).
+Write TWO LinkedIn drafts for the winning story. Length matches a ~240 word operator post.
 
 ${styles}
 
 Rules:
-- Hook: one short sentence (stored in "hook", also used as the first line of the post)
-- Body: EXACTLY two long paragraphs, separated by a blank line
-- Each paragraph: 90–140 words of flowing prose (full sentences)
-- Teach something concrete (upgrade, pin, migrate, patch, try a tool)
-- Casual clear English. Sound like a person, not a news wire
-- End the second paragraph with one question
-- Max 2 hashtags after the second paragraph
-- Do NOT invent fake metrics, clients, or personal stories
-- Never use: synergy, disrupt, game-changer, revolutionary
-- Forbidden: bullet lists, numbered lists, one sentence per line, "BRIEF and BIG" short-line layout
-- This story has not been posted yet. Write a fresh take, not a recap of an earlier post.
+- Hook: one short headline about THIS story (name the tool / CVE / release)
+- Then EXACTLY two long paragraphs (about 100–120 words each), separated by a blank line
+- Paragraph 1: what shipped / why it matters, with specific names (engine, API, version)
+- Paragraph 2: what to do this week (upgrade, pin, swap a client, add a CI check)
+- End with one question
+- 5–8 hashtags after the question
+- One dry aside is fine. Not a joke dump
+- NEVER paste "Article URL", "Comments URL", Points, or HN score dumps
+- Do NOT invent fake metrics or personal stories
+- Never use: synergy, disrupt, game-changer, "here's the thing", "let's dive in"
 
 Return ONLY JSON:
 ${styleJson}`,
@@ -224,6 +318,66 @@ ${styleJson}`,
       ],
     });
     return { ...result, data: ContentSchema.parse(result.data) };
+    } catch (err) {
+      this.log.warn(
+        `Content LLM failed, using template drafts: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+      return {
+        data: this.templateDrafts(winner),
+        raw: '',
+        model: 'heuristic',
+        latencyMs: 0,
+      };
+    }
+  }
+
+  private storyFacts(winner: z.infer<typeof RankSchema>['winner']) {
+    const title = winner.title.replace(/\s+/g, ' ').trim();
+    const why = isHnMetadata(winner.why_it_matters || '')
+      ? ''
+      : cleanStoryBlurb(title, winner.why_it_matters || '');
+    return { title, why };
+  }
+
+  private templateDrafts(
+    winner: z.infer<typeof RankSchema>['winner'],
+  ): z.infer<typeof ContentSchema> {
+    const { hook, body } = this.storyPost(winner);
+    return {
+      drafts: [
+        { style: 'operator_essay', hook, body },
+        { style: 'journey_essay', hook, body },
+      ],
+    };
+  }
+
+  private storyPost(winner: z.infer<typeof RankSchema>['winner']) {
+    const { title, why } = this.storyFacts(winner);
+    const hook = title.length > 88 ? `${title.slice(0, 85).trim()}…` : title;
+    const take = why && why !== `${title}.` ? why : '';
+    const host = (() => {
+      try {
+        return new URL(winner.link).hostname.replace(/^www\./, '');
+      } catch {
+        return '';
+      }
+    })();
+    const p1 = [
+      take || `${title} is the thing worth an hour this week, not a screenshot of the HN thread.`,
+      host.includes('github')
+        ? `Open the repo and read the README before you quote a tweet. The useful part is usually one command, one lockfile change, or one CI check — not the star count.`
+        : `Read the source notes, not the scorecard. The useful part is usually one command, one lockfile change, or one CI check.`,
+      `Name what actually moved: the API, the version, the failure mode. If you cannot name it, you are not ready to post about it either.`,
+    ].join(' ');
+    const p2 = [
+      `If this lands in your stack, do the boring pass: pin the version, run the tests you already have, and write down the first error.`,
+      `*Do that before the hot take.*`,
+      `Add a note in CI so the next person does not rediscover it at 1am. Then tell the team what you changed, not that you "looked into it."`,
+      `What are you actually shipping this week?`,
+    ].join(' ');
+    return { hook, body: `${p1}\n\n${p2}` };
   }
 
   async applyVoice(opts: {
@@ -249,28 +403,41 @@ ${styleJson}`,
 
 Produce a meaningfully different draft that addresses the feedback.
 
-LAYOUT (non-negotiable):
-- Line 1: short hook, then a blank line
-- Then EXACTLY two long paragraphs of flowing prose (90–140 words each), separated by one blank line
-- End the second paragraph with one question
-- Max 2 hashtags after the paragraphs
-- Casual, direct. No bullets. No one-sentence-per-line layout
+LAYOUT (same length as a ~240 word Node release post):
+- Line 1: **bold hook**, then a blank line
+- Then EXACTLY two long paragraphs (~100–120 words each), blank line between them
+- Para 1 = what shipped / why it matters. Para 2 = what to do this week
+- End with one question, then 5–8 hashtags
+- One *italic* aside
+- NEVER copy Article URL / Comments URL / Points / HN metadata
 - Do not invent fake metrics or personal stories
 
 Return ONLY JSON:
-{"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"...","hashtags":["#a","#b"],"source_title":"...","source_link":"..."}`
+{"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"...","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
       : `You are the Voice Agent for Prathamesh Patil.
 
 Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it.
 
-LAYOUT (non-negotiable):
-- Line 1: short hook, then a blank line
-- Then EXACTLY two long paragraphs of flowing prose (90–140 words each)
+LAYOUT (target ~220–280 words, like a Node 22 upgrade post):
+- Line 1: **bold hook** naming the tool/CVE/release, then a blank line
+- Then EXACTLY two long paragraphs (~100–120 words each) of flowing prose
 - Separate the two paragraphs with one blank line
-- Full sentences. No bullets, no numbered lists, no one-thought-per-line
-- End the second paragraph with one question
-- Max 2 hashtags after the second paragraph
-- Stay under 3000 characters total (LinkedIn limit)
+- Para 1: concrete facts (versions, engines, APIs). Para 2: upgrade / pin / CI steps
+- End with one question, then 5–8 hashtags
+- Stay under 3000 characters
+- NEVER copy Article URL, Comments URL, Points, or "# Comments"
+
+ANTI-AI VOICE:
+- Sound slightly amused or annoyed, like you're telling a coworker
+- One dry / sarcastic aside per post (*yes, including the migrate-you-swore-you'd-do*)
+- Specific: name the tool, the version, the pain. No "in today's landscape"
+- Forbidden: "here's the thing", "let's dive in", "it's worth noting", "as developers we", game-changer
+
+MARKDOWN (we convert it to LinkedIn Unicode):
+- Wrap the hook line in **double asterisks**
+- Bold 1–2 key phrases (version, CVE, tool name)
+- Italicize one aside with *single asterisks*
+- Never wrap hashtags or URLs
 
 CRITICAL: Mimic the REAL writing samples (rhythm, honesty). Do NOT copy their topics verbatim. Do NOT invent fake personal stories.
 
@@ -278,12 +445,13 @@ Voice profile:
 ${profile}
 
 Return ONLY JSON:
-{"chosen_style":"operator_essay|journey_essay","post_text":"...","hook":"...","image_prompt":"visual description for a 1024 square supporting image, no text overlay","hashtags":["#a","#b"],"source_title":"...","source_link":"..."}`;
+{"chosen_style":"operator_essay|journey_essay","post_text":"...","hook":"...","image_prompt":"visual description for a 1024 square supporting image, no text overlay","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`;
 
+    try {
     const result = await this.llm.chatJson({
       model,
       messages: [
-        { role: 'system', content: system },
+        { role: 'system', content: `${system}\n\nDo not use <think> tags. Return raw JSON only.` },
         {
           role: 'user',
           content: `===== REAL VOICE SAMPLES =====\n${samplesText}\n===== END SAMPLES =====\n\nContent drafts:\n${JSON.stringify(opts.drafts)}\n\nWinner:\n${JSON.stringify(opts.winner)}\n\nFeedback:\n${opts.feedback || '(none)'}\n\nDo not repeat these previous posts (new story, new argument, new hook):\n${(opts.avoidPosts || []).slice(0, 6).join('\n---\n') || '(none)'}`,
@@ -293,5 +461,28 @@ Return ONLY JSON:
 
     const data = VoiceOutputSchema.parse(result.data);
     return { ...result, data };
+    } catch (err) {
+      this.log.warn(
+        `Voice LLM failed, using template post: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+      const { hook, body } = this.storyPost(opts.winner);
+      const post_text = `**${hook}**\n\n${body}`;
+      return {
+        data: VoiceOutputSchema.parse({
+          chosen_style: 'operator_essay',
+          post_text,
+          hook,
+          image_prompt: `Editorial card about ${hook}`,
+          hashtags: ['#BuildInPublic', '#LearnInPublic', '#JavaScript'],
+          source_title: opts.winner.title,
+          source_link: opts.winner.link,
+        }),
+        raw: '',
+        model: 'heuristic',
+        latencyMs: 0,
+      };
+    }
   }
 }

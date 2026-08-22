@@ -14,9 +14,12 @@ import { TelegramService } from '../notifications/telegram.service';
 import { ConfigService } from '@nestjs/config';
 import { LinkedInService } from '../linkedin/linkedin.service';
 import { loadUsedIndex, UsedIndex } from './uniqueness';
+import { polishDraft } from '../linkedin/polish';
+import { articleUrlFromHn, cleanStoryBlurb, isHnMetadata } from '../news/hn-item';
 import {
   contentTypeForHour,
   cronWindowStatus,
+  POSTS_PER_DAY,
   startOfIstDay,
 } from '../scheduler/cron-window';
 
@@ -59,6 +62,16 @@ export class PipelineService {
       throw Object.assign(new Error('Pipeline already running'), {
         status: 409,
       });
+    }
+
+    if (triggeredBy === 'cron') {
+      const posted = await this.postsPublishedToday();
+      if (posted >= POSTS_PER_DAY) {
+        throw Object.assign(
+          new Error(`Daily cap reached (${POSTS_PER_DAY} posts)`),
+          { status: 409 },
+        );
+      }
     }
 
     const blocking =
@@ -330,6 +343,7 @@ export class PipelineService {
         hook: voice.data.hook,
         source: voice.data.source_title || winner.title,
         version: 1,
+        category: contentType || normalizeBucket(winner.angle),
       });
       await this.finishRun(runId);
     } catch (err) {
@@ -413,6 +427,7 @@ export class PipelineService {
         hook: voice.data.hook,
         source: voice.data.source_title || winner.title,
         version,
+        category: winnerJson.contentType || normalizeBucket(winner.angle),
       });
     } catch (err) {
       if (err instanceof PipelineCancelledError) {
@@ -455,7 +470,13 @@ export class PipelineService {
   private async attachImage(
     runId: string,
     draftId: string,
-    opts: { prompt: string; hook: string; source: string; version: number },
+    opts: {
+      prompt: string;
+      hook: string;
+      source: string;
+      version: number;
+      category?: ContentType | string;
+    },
   ) {
     try {
       await this.setStatus(runId, 'imaging');
@@ -464,6 +485,7 @@ export class PipelineService {
         prompt: opts.prompt,
         hook: opts.hook,
         source: opts.source,
+        category: opts.category,
         key: `drafts/${runId}/v${opts.version}.png`,
       });
       await this.prisma.draft.update({
@@ -489,6 +511,15 @@ export class PipelineService {
         });
       }
     }
+  }
+
+  private async postsPublishedToday() {
+    return this.prisma.run.count({
+      where: {
+        status: 'published',
+        publishedAt: { gte: startOfIstDay() },
+      },
+    });
   }
 
   private async securityPostedToday() {
@@ -597,6 +628,14 @@ export class PipelineService {
     feedback?: string,
     contentType?: ContentType,
   ) {
+    const rawWhy = winner.why_it_matters || '';
+    winner = {
+      ...winner,
+      link: articleUrlFromHn(rawWhy) || winner.link,
+      why_it_matters: isHnMetadata(rawWhy)
+        ? cleanStoryBlurb(winner.title, '')
+        : cleanStoryBlurb(winner.title, rawWhy),
+    };
     const drafts = await this.agents.writeDrafts(
       winner,
       { hooks: used.hooks },
@@ -638,6 +677,27 @@ export class PipelineService {
         );
       }
     }
+
+    const polished = polishDraft({
+      postText: voice.data.post_text,
+      hook: voice.data.hook,
+      hashtags: voice.data.hashtags,
+      category: contentType || normalizeBucket(winner.angle),
+    });
+    voice = {
+      ...voice,
+      data: {
+        ...voice.data,
+        post_text: polished.postText,
+        hook: polished.hook,
+        hashtags: polished.hashtags,
+        image_prompt: polished.postText
+          ? voice.data.image_prompt.replace(/\u0000/g, '')
+          : voice.data.image_prompt,
+        source_title: voice.data.source_title.replace(/\u0000/g, ''),
+        source_link: voice.data.source_link.replace(/\u0000/g, ''),
+      },
+    };
 
     return { voice, drafts };
   }

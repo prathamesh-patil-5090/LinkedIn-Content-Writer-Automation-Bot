@@ -43,6 +43,7 @@ export class LlmService {
 
     for (const model of models) {
       let skipModel = false;
+      let hideReasoning = true;
       for (const jsonMode of [true, false]) {
         if (skipModel) break;
         for (let attempt = 1; attempt <= 2; attempt++) {
@@ -54,6 +55,7 @@ export class LlmService {
               messages: opts.messages,
               temperature: opts.temperature ?? 0.3,
             };
+            if (hideReasoning) body.reasoning_format = 'hidden';
             if (jsonMode) body.response_format = { type: 'json_object' };
 
             const res = await fetch(`${base}/chat/completions`, {
@@ -73,11 +75,23 @@ export class LlmService {
                 failed_generation?: string;
               };
               model?: string;
-              choices?: Array<{ message?: { content?: string } }>;
+              choices?: Array<{
+                message?: {
+                  content?: string | Array<{ type?: string; text?: string }>;
+                };
+              }>;
             };
 
             if (!res.ok) {
               const msg = json.error?.message || `Groq HTTP ${res.status}`;
+              if (
+                hideReasoning &&
+                /reasoning_format|unrecognized|unknown.?param/i.test(msg)
+              ) {
+                hideReasoning = false;
+                attempt -= 1;
+                continue;
+              }
               const salvage = json.error?.failed_generation;
               if (salvage) {
                 try {
@@ -107,7 +121,10 @@ export class LlmService {
               throw new Error(`Groq ${model}: ${msg}`);
             }
 
-            const raw = json.choices?.[0]?.message?.content || '';
+            const raw = choiceText(json.choices?.[0]?.message?.content);
+            if (!raw.trim() || /^<think>/i.test(raw.trim())) {
+              throw new Error('Model returned reasoning with no JSON');
+            }
             const data = extractJson(raw) as T;
             this.lastCallAt = Date.now();
             if (model !== opts.model || !jsonMode) {
@@ -125,7 +142,11 @@ export class LlmService {
             lastError = err instanceof Error ? err : new Error(String(err));
             const msg = lastError.message;
             this.log.warn(`LLM model ${model} failed: ${msg}`);
-            if (/does not exist|do not have access|not entitled|too large/i.test(msg)) {
+            if (
+              /does not exist|do not have access|not entitled|too large|i['’]m sorry/i.test(
+                msg,
+              )
+            ) {
               skipModel = true;
               break;
             }
@@ -152,6 +173,17 @@ export class LlmService {
       await sleep(wait);
     }
   }
+}
+
+function choiceText(
+  content?: string | Array<{ type?: string; text?: string }>,
+) {
+  if (!content) return '';
+  if (typeof content === 'string') return content;
+  return content
+    .map((part) => part.text || '')
+    .join('\n')
+    .trim();
 }
 
 function unique(items: string[]) {

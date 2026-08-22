@@ -444,7 +444,7 @@ export default function TodayPage() {
               ) : null}
               {data.draft?.postText || pending ? (
                 <label className="field draft-text">
-                  <span>Post text</span>
+                  <span>Post text — **bold** and *italic* convert on publish</span>
                   <textarea
                     value={pending ? text : data.draft?.postText || ''}
                     onChange={(e) => setText(e.target.value)}

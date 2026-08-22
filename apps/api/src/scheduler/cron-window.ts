@@ -1,7 +1,8 @@
 import type { ContentType } from '@ldp/shared';
 
-/** Every 2 hours from 07:00 through 00:00 Asia/Kolkata. */
-export const IST_CRON_HOURS = [7, 9, 11, 13, 15, 17, 19, 21, 23, 0];
+/** Six posts/day, every 3 hours, Asia/Kolkata. */
+export const POSTS_PER_DAY = 6;
+export const IST_CRON_HOURS = [7, 10, 13, 16, 19, 22];
 
 export function cronWindowStatus(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -50,21 +51,17 @@ export function contentTypeForHour(
 ): ContentType {
   switch (istHour) {
     case 7:
-    case 15:
       return 'js-lib';
-    case 9:
-    case 17:
+    case 10:
       return 'ai-devtools';
-    case 11:
-      return 'security-bug';
     case 13:
       return 'howto';
+    case 16:
+      return 'security-bug';
     case 19:
       return 'architecture';
-    case 21:
-      return securityPostedToday ? 'js-lib' : 'security-bug';
-    case 23:
-    case 0:
+    case 22:
+      return securityPostedToday ? 'js-lib' : 'ai-devtools';
     default:
       return 'js-lib';
   }

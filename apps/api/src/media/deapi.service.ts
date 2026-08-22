@@ -24,6 +24,7 @@ export class DeapiService {
     key: string;
     hook?: string;
     source?: string;
+    category?: string;
   }): Promise<string | null> {
     if (this.config.get('DEAPI_USE_AI') === 'true') {
       const deapiKey = this.config.get<string>('DEAPI_API_KEY')?.trim();
@@ -43,11 +44,14 @@ export class DeapiService {
     const hook = (opts.hook || opts.prompt.split(/[.!\n]/)[0] || '').trim();
     const source = (opts.source || '').trim();
     try {
-      this.log.log(`Using editorial quote card: ${hook.slice(0, 60)}`);
+      this.log.log(
+        `Using ${opts.category || 'default'} quote card: ${hook.slice(0, 60)}`,
+      );
       const png = makeQuoteCardPng({
         hook,
         source,
-        kicker: kickerFrom(`${hook} ${source} ${opts.prompt}`),
+        category: opts.category,
+        kicker: kickerFrom(`${hook} ${source} ${opts.prompt}`, opts.category),
       });
       return await this.media.saveImage(png, opts.key, 'image/png');
     } catch (err) {

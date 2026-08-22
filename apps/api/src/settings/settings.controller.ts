@@ -61,7 +61,7 @@ export class SettingsController {
         storage,
       },
       cron: {
-        schedule: 'Every 2 hours, 07:00–00:00 Asia/Kolkata',
+        schedule: '6 posts/day · 07:00, 10:00, 13:00, 16:00, 19:00, 22:00 Asia/Kolkata',
         autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
       },
     };

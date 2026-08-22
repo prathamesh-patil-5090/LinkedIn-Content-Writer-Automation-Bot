@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import Parser from 'rss-parser';
 import { PrismaService } from '../prisma/prisma.module';
+import { articleUrlFromHn, cleanStoryBlurb } from './hn-item';
 
 export type CollectedStory = {
   title: string;
@@ -114,19 +115,14 @@ export class NewsService {
     const stories: CollectedStory[] = [];
     for (const source of sources) {
       try {
-        const feed = await this.parser.parseURL(source.rssUrl);
+        const feed = await this.parseRss(source.rssUrl);
         for (const item of feed.items || []) {
           const title = (item.title || '').trim();
-          const link = (item.link || item.guid || '').trim();
+          const raw = `${item.content || ''} ${item.contentSnippet || ''} ${item.summary || ''}`;
+          const article = articleUrlFromHn(raw);
+          const link = (article || item.link || item.guid || '').trim();
           if (!title || !link) continue;
-          const summary = (
-            item.contentSnippet ||
-            item.content ||
-            item.summary ||
-            ''
-          )
-            .replace(/<[^>]+>/g, '')
-            .slice(0, 500);
+          const summary = cleanStoryBlurb(title, raw);
           const relevance = this.score(`${title} ${summary} ${source.name}`);
           stories.push({
             title,
@@ -140,6 +136,19 @@ export class NewsService {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`RSS failed for ${source.name}: ${msg}`);
+        if (/^HN /i.test(source.name)) {
+          try {
+            const hn = await this.fetchHnAlgolia(source.name);
+            stories.push(...hn);
+            this.log.log(`HN Algolia fallback filled ${hn.length} for ${source.name}`);
+          } catch (hnErr) {
+            this.log.warn(
+              `HN Algolia fallback failed for ${source.name}: ${
+                hnErr instanceof Error ? hnErr.message : hnErr
+              }`,
+            );
+          }
+        }
       }
     }
 
@@ -157,6 +166,62 @@ export class NewsService {
       stories: finalStories.length ? finalStories : ranked.slice(0, cap),
       collectedAt: new Date(),
     };
+  }
+
+  private async parseRss(url: string) {
+    try {
+      return await this.parser.parseURL(url);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/502|503|429|ECONNRESET|timeout/i.test(msg)) throw err;
+      await new Promise((r) => setTimeout(r, 600));
+      return this.parser.parseURL(url);
+    }
+  }
+
+  private async fetchHnAlgolia(sourceName: string): Promise<CollectedStory[]> {
+    const frontpage = /frontpage/i.test(sourceName);
+    const query = /javascript/i.test(sourceName)
+      ? 'JavaScript TypeScript React Node'
+      : /security/i.test(sourceName)
+        ? 'CVE vulnerability RCE exploit'
+        : /ai/i.test(sourceName)
+          ? 'LLM Copilot Claude RAG'
+          : '';
+    const url = frontpage
+      ? 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=25'
+      : `https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=20`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'LinkedInDailyPoster/1.0' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`HN Algolia HTTP ${res.status}`);
+    const json = (await res.json()) as {
+      hits?: Array<{
+        title?: string;
+        url?: string;
+        objectID?: string;
+        created_at?: string;
+        story_text?: string;
+      }>;
+    };
+    return (json.hits || [])
+      .filter((h) => h.title)
+      .map((h) => {
+        const title = (h.title || '').trim();
+        const link =
+          h.url ||
+          `https://news.ycombinator.com/item?id=${h.objectID || ''}`;
+        const summary = cleanStoryBlurb(title, h.story_text || '');
+        return {
+          title,
+          link,
+          summary,
+          published_at: h.created_at,
+          source: sourceName,
+          relevance: this.score(`${title} ${summary} ${sourceName}`),
+        };
+      });
   }
 
   private score(text: string): number {

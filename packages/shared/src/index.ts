@@ -45,10 +45,10 @@ export const StorySchema = z.object({
 export type Story = z.infer<typeof StorySchema>;
 
 export const VoiceOutputSchema = z.object({
-  post_text: z.string().min(200),
+  post_text: z.string().min(180),
   hook: z.string().min(1),
   image_prompt: z.string().min(1),
-  hashtags: z.array(z.string()).max(5).default([]),
+  hashtags: z.array(z.string()).max(8).default([]),
   chosen_style: z.string(),
   source_title: z.string(),
   source_link: z.string(),

@@ -1,4 +1,5 @@
 import { PrismaService } from '../prisma/prisma.module';
+import { foldStyledLetters } from '../linkedin/format';
 
 export type UsedStory = { title: string; link: string };
 
@@ -42,7 +43,7 @@ export function normalizeUrl(url: string): string {
 }
 
 export function normalizeText(value: string): string {
-  return value
+  return foldStyledLetters(value)
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/#[\w]+/g, ' ')

@@ -28,6 +28,7 @@ import {
 } from '../auth/session.guard';
 import { PipelineService } from '../pipeline/pipeline.service';
 import { LinkedInService } from '../linkedin/linkedin.service';
+import { polishDraft } from '../linkedin/polish';
 
 class SelectedStoryDto {
   @IsString()
@@ -183,9 +184,24 @@ export class RunsController {
       throw new BadRequestException('Draft has no text to publish');
     }
 
+    const run = await this.prisma.run.findUnique({ where: { id } });
+    const winnerJson = run?.winnerJson as
+      | { contentType?: string; winner?: { angle?: string } }
+      | null;
+    const polished = polishDraft({
+      postText: draft.postText,
+      hook: draft.hook || '',
+      hashtags: draft.hashtags,
+      category: winnerJson?.contentType || winnerJson?.winner?.angle,
+    });
+
     await this.prisma.draft.update({
       where: { id: draft.id },
-      data: { status: 'approved' },
+      data: {
+        status: 'approved',
+        postText: polished.postText,
+        hashtags: polished.hashtags,
+      },
     });
     await this.prisma.run.update({
       where: { id },
@@ -195,7 +211,7 @@ export class RunsController {
     try {
       const result = await this.linkedin.publishText(
         user.id,
-        draft.postText,
+        polished.postText,
         draft.imageUrl,
       );
       await this.prisma.run.update({
@@ -213,7 +229,7 @@ export class RunsController {
             draft.hook ||
             draft.sourceTitle ||
             `Published ${new Date().toISOString().slice(0, 10)}`,
-          body: draft.postText,
+          body: polished.postText,
           sourceUrl: draft.sourceLink,
           source: 'published_by_app',
           isActive: true,
