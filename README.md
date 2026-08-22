@@ -96,4 +96,8 @@ Health: /api/v1/health/live
 
 Set on Render: `APP_URL=https://linked-in-content-writer-automation.vercel.app` (no trailing slash), `COOKIE_SAMESITE=none`, `LINKEDIN_REDIRECT_URI=https://linkedin-content-writer-automation-bot.onrender.com/api/v1/linkedin/oauth/callback`.
 
-**Web** — Vercel, root directory `apps/web`. Set `NEXT_PUBLIC_API_URL=https://linkedin-content-writer-automation-bot.onrender.com/api/v1` and **redeploy** (it is baked in at build).
+**Web** — Vercel, root directory `apps/web` (Include files outside the root directory: ON).
+
+- Node.js Version: **20.x** (Project Settings → General). `apps/web` also pins `engines.node` / `.nvmrc` so Vercel does not pick 24.
+- Install only needs `@ldp/web` + `@ldp/shared`, not the Nest API. That is why a full-workspace install looks like 950 packages.
+- Set `NEXT_PUBLIC_API_URL=https://linkedin-content-writer-automation-bot.onrender.com/api/v1` and **redeploy** (it is baked in at build).
