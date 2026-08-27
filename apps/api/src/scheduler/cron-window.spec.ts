@@ -8,15 +8,16 @@ import { normalizeBucket } from '@ldp/shared';
 describe('contentTypeForHour', () => {
   it('maps the IST slots to a mixed day', () => {
     expect(contentTypeForHour(7, false)).toBe('js-lib');
-    expect(contentTypeForHour(9, false)).toBe('ai-devtools');
-    expect(contentTypeForHour(11, false)).toBe('security-bug');
+    expect(contentTypeForHour(10, false)).toBe('ai-devtools');
     expect(contentTypeForHour(13, false)).toBe('howto');
+    expect(contentTypeForHour(16, false)).toBe('security-bug');
     expect(contentTypeForHour(19, false)).toBe('architecture');
+    expect(contentTypeForHour(22, false)).toBe('ai-devtools');
   });
 
-  it('caps evening security if a CVE already shipped today', () => {
-    expect(contentTypeForHour(21, true)).toBe('js-lib');
-    expect(contentTypeForHour(21, false)).toBe('security-bug');
+  it('avoids a second security post in the last slot', () => {
+    expect(contentTypeForHour(22, true)).toBe('js-lib');
+    expect(contentTypeForHour(22, false)).toBe('ai-devtools');
   });
 });
 

@@ -16,7 +16,7 @@ export class SchedulerService {
   ) {}
 
   /** In-process timer — Render keeps this API process running. */
-  @Cron('0 7,9,11,13,15,17,19,21,23,0 * * *', {
+  @Cron('0 7,10,13,16,19,22 * * *', {
     timeZone: 'Asia/Kolkata',
     name: 'ist-generate-publish',
   })

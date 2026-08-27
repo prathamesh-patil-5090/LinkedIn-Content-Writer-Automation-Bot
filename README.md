@@ -76,7 +76,7 @@ Telegram gets a ping when a draft is ready (`APP_URL` link).
 
 The API runs its own timer (`@nestjs/schedule`). On Render Hobby the web service stays up, so slots fire without cron-job.org, Vercel cron, or Render Cron Jobs.
 
-Slots: 07, 09, 11, 13, 15, 17, 19, 21, 23, 00 `Asia/Kolkata`. Each cron run generates a **new** story and **publishes it** (`CRON_AUTO_PUBLISH=true`) — no Approve click. Stories, source URLs, and post copy that were already used are skipped. Manual “Generate” still waits for Approve. Pause from Settings (`cronEnabled`) or set `CRON_ENABLED=false`.
+Slots: **6 posts/day** at 07, 10, 13, 16, 19, 22 `Asia/Kolkata`. Each cron run generates a **new** story and **publishes it** (`CRON_AUTO_PUBLISH=true`) — no Approve click. After 6 published posts that IST day, later ticks are skipped. Stories, source URLs, and post copy that were already used are skipped. Manual “Generate” still waits for Approve. Pause from Settings (`cronEnabled`) or set `CRON_ENABLED=false`.
 
 Set `TZ=Asia/Kolkata` on the Render **API** service. Keep a single API instance so two processes cannot double-post.
 
@@ -96,4 +96,8 @@ Health: /api/v1/health/live
 
 Set on Render: `APP_URL=https://linked-in-content-writer-automation.vercel.app` (no trailing slash), `COOKIE_SAMESITE=none`, `LINKEDIN_REDIRECT_URI=https://linkedin-content-writer-automation-bot.onrender.com/api/v1/linkedin/oauth/callback`.
 
-**Web** — Vercel, root directory `apps/web`. Set `NEXT_PUBLIC_API_URL=https://linkedin-content-writer-automation-bot.onrender.com/api/v1` and **redeploy** (it is baked in at build).
+**Web** — Vercel, root directory `apps/web` (Include files outside the root directory: ON).
+
+- Node.js Version: **20.x** (Project Settings → General). `apps/web` also pins `engines.node` / `.nvmrc` so Vercel does not pick 24.
+- Install only needs `@ldp/web` + `@ldp/shared`, not the Nest API. That is why a full-workspace install looks like 950 packages.
+- Set `NEXT_PUBLIC_API_URL=https://linkedin-content-writer-automation-bot.onrender.com/api/v1` and **redeploy** (it is baked in at build).

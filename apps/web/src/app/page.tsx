@@ -485,7 +485,7 @@ export default function TodayPage() {
               ) : null}
               {data.draft?.postText || pending ? (
                 <label className="field draft-text">
-                  <span>Post text</span>
+                  <span>Post text — **bold** and *italic* convert on publish</span>
                   {pending ? (
                     <LinkedInFormatToolbar
                       value={text}
