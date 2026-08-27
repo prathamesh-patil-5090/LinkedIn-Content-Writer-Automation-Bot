@@ -1,4 +1,4 @@
-import { extractJson } from './json-extract';
+import { extractJson, stripReasoningNoise } from './json-extract';
 
 describe('extractJson', () => {
   it('parses a plain object', () => {
@@ -8,6 +8,23 @@ describe('extractJson', () => {
   it('strips fences and think tags', () => {
     const raw = `<think>nope</think>\n\`\`\`json\n{"winner":{"title":"x"}}\n\`\`\``;
     expect(extractJson(raw)).toEqual({ winner: { title: 'x' } });
+  });
+
+  it('strips unclosed think tags before JSON', () => {
+    const raw = `<think>
+He is ranking stories carefully...
+{"top_stories":[{"title":"x","link":"https://example.com","why_it_matters":"y","trend_score":8,"angle":"js-lib"}]}`;
+    expect(extractJson(raw)).toEqual({
+      top_stories: [
+        {
+          title: 'x',
+          link: 'https://example.com',
+          why_it_matters: 'y',
+          trend_score: 8,
+          angle: 'js-lib',
+        },
+      ],
+    });
   });
 
   it('strips an unclosed think dump and reads the JSON after it', () => {
@@ -38,5 +55,11 @@ describe('extractJson', () => {
     expect(extractJson('{"winner":{"title":"Node 22"')).toEqual({
       winner: { title: 'Node 22' },
     });
+  });
+});
+
+describe('stripReasoningNoise', () => {
+  it('drops unclosed think preamble', () => {
+    expect(stripReasoningNoise('<think>abc{"a":1}')).toBe('{"a":1}');
   });
 });

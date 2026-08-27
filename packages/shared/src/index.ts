@@ -69,3 +69,4 @@ export function isGenerating(status: RunStatus): boolean {
 }
 
 export * from './content-types';
+export * from './linkedin-text-format';

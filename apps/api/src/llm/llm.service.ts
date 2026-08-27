@@ -50,9 +50,19 @@ export class LlmService {
           await this.throttle();
           const started = Date.now();
           try {
+            const messages = jsonMode
+              ? opts.messages
+              : [
+                  ...opts.messages,
+                  {
+                    role: 'user' as const,
+                    content:
+                      'Return ONLY one valid JSON object. No markdown, no <think> tags, no commentary before or after the JSON.',
+                  },
+                ];
             const body: Record<string, unknown> = {
               model,
-              messages: opts.messages,
+              messages,
               temperature: opts.temperature ?? 0.3,
             };
             if (hideReasoning) body.reasoning_format = 'hidden';
@@ -107,7 +117,9 @@ export class LlmService {
                     latencyMs: Date.now() - started,
                   };
                 } catch {
-                  /* fall through */
+                  this.log.warn(
+                    `${model} failed_generation unusable: ${salvage.slice(0, 120)}`,
+                  );
                 }
               }
               const waitSec = parseRetrySeconds(msg);
@@ -141,7 +153,7 @@ export class LlmService {
           } catch (err) {
             lastError = err instanceof Error ? err : new Error(String(err));
             const msg = lastError.message;
-            this.log.warn(`LLM model ${model} failed: ${msg}`);
+            this.log.warn(`LLM model ${model} failed: ${msg.slice(0, 240)}`);
             if (
               /does not exist|do not have access|not entitled|too large|i['’]m sorry/i.test(
                 msg,
@@ -150,7 +162,10 @@ export class LlmService {
               skipModel = true;
               break;
             }
-            if (isJsonModeError(msg) && jsonMode) break;
+            // JSON-mode failures → try same model without response_format.
+            if ((isJsonModeError(msg) || /no json object/i.test(msg)) && jsonMode) {
+              break;
+            }
             const waitSec = parseRetrySeconds(msg);
             if (waitSec != null && attempt < 2) {
               await sleep((waitSec + 0.4) * 1000);
@@ -166,7 +181,7 @@ export class LlmService {
   }
 
   private async throttle() {
-    const gapMs = 8_000;
+    const gapMs = 3_000;
     const wait = gapMs - (Date.now() - this.lastCallAt);
     if (this.lastCallAt && wait > 0) {
       this.log.log(`Groq TPM pause ${Math.ceil(wait / 1000)}s`);

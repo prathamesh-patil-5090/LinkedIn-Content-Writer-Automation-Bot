@@ -63,6 +63,13 @@ export class SettingsController {
       cron: {
         schedule: '6 posts/day · 07:00, 10:00, 13:00, 16:00, 19:00, 22:00 Asia/Kolkata',
         autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
+        disabledByEnv: this.config.get('CRON_DISABLED') === 'true',
+        envEnabled: this.config.get('CRON_ENABLED') !== 'false',
+      },
+      images: {
+        provider:
+          this.config.get('DEAPI_USE_AI') === 'true' ? 'deapi' : 'quote-card',
+        deapiReady: Boolean(this.config.get<string>('DEAPI_API_KEY')?.trim()),
       },
     };
   }

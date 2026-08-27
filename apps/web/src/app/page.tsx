@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, isUnauthorized } from '@/lib/api';
 import { AppShell } from '@/components/AppShell';
+import { LinkedInFormatToolbar } from '@/components/LinkedInFormatToolbar';
 import {
   CONTENT_TYPE_LABELS,
   normalizeBucket,
@@ -35,6 +36,7 @@ type TodayResponse = {
     id: string;
     hook?: string | null;
     postText?: string | null;
+    tweetText?: string | null;
     imageUrl?: string | null;
     chosenStyle?: string | null;
     sourceTitle?: string | null;
@@ -62,19 +64,25 @@ export default function TodayPage() {
   const [stories, setStories] = useState<Story[]>([]);
   const [selected, setSelected] = useState<Story | null>(null);
   const [text, setText] = useState('');
+  const [tweet, setTweet] = useState('');
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const imageWaitStarted = useRef<number | null>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const loadToday = useCallback(async () => {
     const today = await apiFetch<TodayResponse>('/runs/today');
     setData(today);
     if (today.draft?.status === 'pending') {
       setText(today.draft.postText || '');
+      setTweet(today.draft.tweetText || '');
     } else if (!today.draft) {
       setText('');
+      setTweet('');
+    } else {
+      setTweet(today.draft.tweetText || '');
     }
     return today;
   }, []);
@@ -176,8 +184,35 @@ export default function TodayPage() {
     try {
       await apiFetch(`/runs/${data.run.id}/draft`, {
         method: 'PATCH',
-        body: JSON.stringify({ postText: text }),
+        body: JSON.stringify({ postText: text, tweetText: tweet || undefined }),
       });
+      await loadToday();
+    } catch (err) {
+      setError(parseErr(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function sendTweetTelegram(regenerate = false) {
+    if (!data?.run?.id) return;
+    setBusy(regenerate ? 'tweet-regen' : 'tweet');
+    setError(null);
+    try {
+      if (tweet && tweet !== data.draft?.tweetText && !regenerate) {
+        await apiFetch(`/runs/${data.run.id}/draft`, {
+          method: 'PATCH',
+          body: JSON.stringify({ tweetText: tweet }),
+        });
+      }
+      const res = await apiFetch<{ ok: boolean; tweet: string }>(
+        `/runs/${data.run.id}/telegram-tweet`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ regenerate }),
+        },
+      );
+      if (res.tweet) setTweet(res.tweet);
       await loadToday();
     } catch (err) {
       setError(parseErr(err));
@@ -195,10 +230,16 @@ export default function TodayPage() {
     setBusy('approve');
     setError(null);
     try {
-      if (text !== data.draft?.postText) {
+      if (
+        text !== data.draft?.postText ||
+        tweet !== (data.draft?.tweetText || '')
+      ) {
         await apiFetch(`/runs/${data.run.id}/draft`, {
           method: 'PATCH',
-          body: JSON.stringify({ postText: text }),
+          body: JSON.stringify({
+            postText: text,
+            tweetText: tweet || undefined,
+          }),
         });
       }
       await apiFetch(`/runs/${data.run.id}/approve`, { method: 'POST' });
@@ -445,7 +486,16 @@ export default function TodayPage() {
               {data.draft?.postText || pending ? (
                 <label className="field draft-text">
                   <span>Post text — **bold** and *italic* convert on publish</span>
+                  {pending ? (
+                    <LinkedInFormatToolbar
+                      value={text}
+                      onChange={setText}
+                      textareaRef={textAreaRef}
+                      disabled={busy !== null}
+                    />
+                  ) : null}
                   <textarea
+                    ref={textAreaRef}
                     value={pending ? text : data.draft?.postText || ''}
                     onChange={(e) => setText(e.target.value)}
                     readOnly={!pending}
@@ -457,6 +507,21 @@ export default function TodayPage() {
                   No draft text yet for this run.
                 </p>
               )}
+              {data.draft?.postText || tweet ? (
+                <label className="field draft-text">
+                  <span>
+                    X / Twitter ({(pending ? tweet : data.draft?.tweetText || '').length}
+                    /280)
+                  </span>
+                  <textarea
+                    value={pending ? tweet : data.draft?.tweetText || ''}
+                    onChange={(e) => setTweet(e.target.value)}
+                    readOnly={!pending}
+                    rows={4}
+                    placeholder="Shorter version for X — also sent to Telegram when the draft is ready"
+                  />
+                </label>
+              ) : null}
               {data.draft?.sourceTitle ? (
                 <p style={{ margin: 0, fontSize: 13 }}>
                   {data.draft.sourceLink ? (
@@ -536,6 +601,22 @@ export default function TodayPage() {
               onClick={() => void saveVoice()}
             >
               Save voice
+            </button>
+            <button
+              className="btn ghost"
+              disabled={busy !== null || !data?.draft?.postText || !data?.run}
+              onClick={() => void sendTweetTelegram(false)}
+              title="Send the ≤280 tweet version to Telegram"
+            >
+              {busy === 'tweet' ? 'Sending…' : 'Tweet → Telegram'}
+            </button>
+            <button
+              className="btn ghost"
+              disabled={busy !== null || !data?.draft?.postText || !data?.run}
+              onClick={() => void sendTweetTelegram(true)}
+              title="Rewrite tweet and send to Telegram"
+            >
+              {busy === 'tweet-regen' ? 'Rewriting…' : 'Regen tweet'}
             </button>
           </div>
         </section>

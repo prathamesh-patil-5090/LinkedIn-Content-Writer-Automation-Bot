@@ -241,6 +241,82 @@ button, input, textarea, select { font: inherit; color: inherit; }
   resize: vertical;
 }
 
+.li-format {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.li-format-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.li-format-btn {
+  appearance: none;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #1a1d26;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.li-format-btn:hover:not(:disabled) {
+  border-color: #3d424e;
+  background: #252830;
+}
+
+.li-format-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.li-format-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.li-format-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.li-format-chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.li-format-chip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: #3d424e;
+}
+
+.li-format-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.li-format-hint {
+  min-height: 1.2em;
+  font-size: 12px;
+}
+
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
 .error-text { margin: 0; color: var(--bad); font-size: 13px; }
