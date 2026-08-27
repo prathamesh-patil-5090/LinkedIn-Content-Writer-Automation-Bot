@@ -52,12 +52,19 @@ export class HealthController {
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
       db,
       groq: { ready: Boolean(this.config.get('GROQ_API_KEY')) },
+      images: {
+        provider:
+          this.config.get('DEAPI_USE_AI') === 'true' ? 'deapi' : 'quote-card',
+        deapiReady: Boolean(this.config.get<string>('DEAPI_API_KEY')?.trim()),
+      },
       linkedin: { configured: this.linkedin.configured() },
       telegram: this.telegram.configured(),
       storage: this.media.configured(),
       cron: {
         driver: 'nest',
-        enabled: this.config.get('CRON_ENABLED') !== 'false',
+        enabled:
+          this.config.get('CRON_DISABLED') !== 'true' &&
+          this.config.get('CRON_ENABLED') !== 'false',
         autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
         ...cronWindowStatus(),
         nextType: contentTypeForHour(cronWindowStatus().istHour, false),

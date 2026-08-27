@@ -62,7 +62,7 @@ class CreateRunDto {
   story?: SelectedStoryDto;
 }
 
-class PatchDraftDto {
+  class PatchDraftDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
@@ -73,6 +73,10 @@ class PatchDraftDto {
   hook?: string;
 
   @IsOptional()
+  @IsString()
+  tweetText?: string;
+
+  @IsOptional()
   hashtags?: string[];
 }
 
@@ -80,6 +84,11 @@ class FeedbackDto {
   @IsOptional()
   @IsString()
   feedback?: string;
+}
+
+class TelegramTweetDto {
+  @IsOptional()
+  regenerate?: boolean;
 }
 
 @Controller('runs')
@@ -168,9 +177,26 @@ export class RunsController {
       data: {
         postText: body.postText ?? draft.postText,
         hook: body.hook ?? draft.hook,
+        tweetText: body.tweetText ?? draft.tweetText,
         hashtags: body.hashtags ?? draft.hashtags,
       },
     });
+  }
+
+  /** Regenerate (optional) and send the ≤280 X/Twitter version via Telegram. */
+  @Post(':id/telegram-tweet')
+  async telegramTweet(
+    @Param('id') id: string,
+    @Body() body: TelegramTweetDto,
+  ) {
+    try {
+      return await this.pipeline.resendTweetTelegram(
+        id,
+        Boolean(body?.regenerate),
+      );
+    } catch (err) {
+      this.rethrow(err);
+    }
   }
 
   @Post(':id/approve')

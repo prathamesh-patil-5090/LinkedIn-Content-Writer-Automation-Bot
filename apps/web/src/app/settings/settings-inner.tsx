@@ -11,7 +11,16 @@ type Settings = {
   cronEnabled: boolean;
   telegramEnabled: boolean;
   telegramChatId?: string | null;
-  cron?: { schedule: string; autoPublish: boolean };
+  cron?: {
+    schedule: string;
+    autoPublish: boolean;
+    disabledByEnv?: boolean;
+    envEnabled?: boolean;
+  };
+  images?: {
+    provider: string;
+    deapiReady?: boolean;
+  };
   integrations?: {
     telegram: { ready: boolean; envTokenSet: boolean; envChatIdSet: boolean };
     storage: { driver: string; ready: boolean; hint?: string };
@@ -141,13 +150,32 @@ export default function SettingsInner() {
             Runs on the API process · {settings.cron?.schedule}
             {settings.cron?.autoPublish ? ' · auto-publish' : ' · draft only'}
           </p>
+          {settings.cron?.disabledByEnv ? (
+            <p className="muted" style={{ margin: 0 }}>
+              Off in this environment (`CRON_DISABLED=true`). Manual Generate
+              still works.
+            </p>
+          ) : null}
           <button
             className="btn"
             onClick={() => void toggleCron()}
-            disabled={busy === 'cron'}
+            disabled={busy === 'cron' || settings.cron?.disabledByEnv}
           >
             {settings.cronEnabled ? 'Disable cron' : 'Enable cron'}
           </button>
+        </section>
+
+        <section className="card stack">
+          <h2>Images</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {settings.images?.provider === 'deapi'
+              ? 'deAPI AI images'
+              : 'Quote card (SVG) — default draft thumbnail'}
+          </p>
+          <p className="muted" style={{ margin: 0 }}>
+            Each draft gets an editorial card from the hook + source. Optional
+            deAPI art via DEAPI_USE_AI=true.
+          </p>
         </section>
 
         <section className="card stack">

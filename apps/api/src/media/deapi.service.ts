@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { fromUnicodeVariant } from '@ldp/shared';
 import { MediaService } from './media.service';
 import { kickerFrom, makeQuoteCardPng } from './quote-card';
 import { makeCardPng } from './local-png';
@@ -24,6 +25,7 @@ export class DeapiService {
     key: string;
     hook?: string;
     source?: string;
+    postText?: string;
   }): Promise<string | null> {
     if (this.config.get('DEAPI_USE_AI') === 'true') {
       const deapiKey = this.config.get<string>('DEAPI_API_KEY')?.trim();
@@ -40,8 +42,20 @@ export class DeapiService {
       }
     }
 
-    const hook = (opts.hook || opts.prompt.split(/[.!\n]/)[0] || '').trim();
-    const source = (opts.source || '').trim();
+    return this.generateQuoteCard(opts);
+  }
+
+  /** Editorial SVG quote card (default draft image). */
+  private async generateQuoteCard(opts: {
+    prompt: string;
+    key: string;
+    hook?: string;
+    source?: string;
+  }): Promise<string | null> {
+    const hook = fromUnicodeVariant(
+      (opts.hook || opts.prompt.split(/[.!\n]/)[0] || '').trim(),
+    );
+    const source = fromUnicodeVariant((opts.source || '').trim());
     try {
       this.log.log(`Using editorial quote card: ${hook.slice(0, 60)}`);
       const png = makeQuoteCardPng({

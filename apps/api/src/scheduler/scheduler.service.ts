@@ -25,6 +25,10 @@ export class SchedulerService {
   }
 
   async tick(source: 'nest' | 'http', force = false) {
+    // Dev: set CRON_DISABLED=true to silence Nest slot timers locally.
+    if (this.config.get('CRON_DISABLED') === 'true') {
+      return { ok: true, skipped: 'CRON_DISABLED=true', source };
+    }
     if (this.config.get('CRON_ENABLED') === 'false') {
       return { ok: true, skipped: 'CRON_ENABLED=false', source };
     }

@@ -323,12 +323,20 @@ export class PipelineService {
         },
       });
 
+      await this.attachTweet(runId, draft.id, {
+        postText: voice.data.post_text,
+        hook: voice.data.hook,
+        sourceTitle: voice.data.source_title || winner.title,
+        sourceLink: voice.data.source_link || winner.link,
+      });
+
       await this.setStatus(runId, 'pending_approval');
 
       await this.attachImage(runId, draft.id, {
         prompt: voice.data.image_prompt,
         hook: voice.data.hook,
         source: voice.data.source_title || winner.title,
+        postText: voice.data.post_text,
         version: 1,
       });
       await this.finishRun(runId);
@@ -405,6 +413,13 @@ export class PipelineService {
         },
       });
 
+      await this.attachTweet(runId, draft.id, {
+        postText: voice.data.post_text,
+        hook: voice.data.hook,
+        sourceTitle: voice.data.source_title || winner.title,
+        sourceLink: voice.data.source_link || winner.link,
+      });
+
       await this.setStatus(runId, 'pending_approval');
       await this.notifyDraftReady(runId);
 
@@ -412,6 +427,7 @@ export class PipelineService {
         prompt: voice.data.image_prompt,
         hook: voice.data.hook,
         source: voice.data.source_title || winner.title,
+        postText: voice.data.post_text,
         version,
       });
     } catch (err) {
@@ -455,7 +471,13 @@ export class PipelineService {
   private async attachImage(
     runId: string,
     draftId: string,
-    opts: { prompt: string; hook: string; source: string; version: number },
+    opts: {
+      prompt: string;
+      hook: string;
+      source: string;
+      postText?: string;
+      version: number;
+    },
   ) {
     try {
       await this.setStatus(runId, 'imaging');
@@ -464,6 +486,7 @@ export class PipelineService {
         prompt: opts.prompt,
         hook: opts.hook,
         source: opts.source,
+        postText: opts.postText,
         key: `drafts/${runId}/v${opts.version}.png`,
       });
       await this.prisma.draft.update({
@@ -472,6 +495,8 @@ export class PipelineService {
       });
       await this.logStep(runId, 'image', imageUrl || 'unavailable', {
         imageUrl,
+        mode:
+          this.config.get('DEAPI_USE_AI') === 'true' ? 'deapi' : 'quote-card',
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -724,8 +749,109 @@ export class PipelineService {
     });
   }
 
+  /** Public: send (or regenerate) the tweet version to Telegram. */
+  async resendTweetTelegram(runId: string, regenerate = false) {
+    const draft = await this.prisma.draft.findFirst({
+      where: { runId },
+      orderBy: { version: 'desc' },
+    });
+    if (!draft?.postText) {
+      throw new Error('No draft text to compress into a tweet');
+    }
+
+    let tweet = draft.tweetText?.trim() || '';
+    if (regenerate || !tweet) {
+      const result = await this.agents.writeTweet({
+        postText: draft.postText,
+        hook: draft.hook || draft.sourceTitle || 'Update',
+        sourceTitle: draft.sourceTitle || undefined,
+        sourceLink: draft.sourceLink || undefined,
+      });
+      tweet = result.tweet;
+      await this.prisma.draft.update({
+        where: { id: draft.id },
+        data: { tweetText: tweet },
+      });
+      await this.logStep(runId, 'tweet', tweet, result, result.latencyMs);
+    }
+
+    const appUrl = this.config.get('APP_URL') || 'http://localhost:3000';
+    const sent = await this.telegram.sendDraftWithTweet({
+      appUrl,
+      runId,
+      hook: draft.hook || undefined,
+      tweet,
+      sourceTitle: draft.sourceTitle || undefined,
+    });
+    if (!sent.ok) {
+      throw new Error(sent.error || 'Telegram send failed');
+    }
+    return { ok: true, tweet };
+  }
+
+  private async attachTweet(
+    runId: string,
+    draftId: string,
+    opts: {
+      postText: string;
+      hook: string;
+      sourceTitle?: string;
+      sourceLink?: string;
+    },
+  ) {
+    try {
+      const result = await this.agents.writeTweet(opts);
+      await this.prisma.draft.update({
+        where: { id: draftId },
+        data: { tweetText: result.tweet },
+      });
+      await this.logStep(runId, 'tweet', result.tweet, result, result.latencyMs);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`Tweet skipped: ${msg}`);
+      await this.logStep(runId, 'tweet', 'skipped', { error: msg });
+    }
+  }
+
   private async notifyDraftReady(runId: string) {
     const appUrl = this.config.get('APP_URL') || 'http://localhost:3000';
+    const draft = await this.prisma.draft.findFirst({
+      where: { runId },
+      orderBy: { version: 'desc' },
+      select: {
+        hook: true,
+        tweetText: true,
+        postText: true,
+        sourceTitle: true,
+        sourceLink: true,
+      },
+    });
+
+    let tweet = draft?.tweetText?.trim() || '';
+    if (!tweet && draft?.postText) {
+      const result = await this.agents.writeTweet({
+        postText: draft.postText,
+        hook: draft.hook || draft.sourceTitle || 'Update',
+        sourceTitle: draft.sourceTitle || undefined,
+        sourceLink: draft.sourceLink || undefined,
+      });
+      tweet = result.tweet;
+    }
+
+    if (tweet) {
+      const sent = await this.telegram.sendDraftWithTweet({
+        appUrl,
+        runId,
+        hook: draft?.hook || undefined,
+        tweet,
+        sourceTitle: draft?.sourceTitle || undefined,
+      });
+      if (!sent.ok) {
+        this.log.warn(`Telegram tweet notify failed: ${sent.error}`);
+      }
+      return;
+    }
+
     await this.telegram.ping(
       `LinkedIn draft ready.\nOpen: ${appUrl}\nRun: ${runId}`,
     );
