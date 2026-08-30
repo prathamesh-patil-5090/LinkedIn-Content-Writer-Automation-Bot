@@ -45,15 +45,25 @@ describe('post uniqueness', () => {
   it('flags the same post body', () => {
     const text =
       'Over a third of AI agent skills are vulnerable to prompt injection. Patch your stack.';
-    expect(similarText(text, text, 0.5)).toBe(true);
+    expect(similarText(text, text, 0.72)).toBe(true);
   });
 
-  it('keeps distinct posts', () => {
+  it('keeps distinct posts that share niche words', () => {
     expect(
       similarText(
         'Pin your React version today after the RSC RCE. Upgrade to the patched release before you ship.',
         'Snyk scanned agent skill packs and found prompt injection in more than a third of them.',
-        0.5,
+        0.72,
+      ),
+    ).toBe(false);
+  });
+
+  it('does not treat two Vitest tips as clones just for shared tooling words', () => {
+    expect(
+      similarText(
+        'Vitest and Next.js 14 configs fight each other until you switch to jsdom and fix aliases.',
+        'Upgrade Node this week, pin the lockfile, and stop calling eighteen stable forever.',
+        0.72,
       ),
     ).toBe(false);
   });

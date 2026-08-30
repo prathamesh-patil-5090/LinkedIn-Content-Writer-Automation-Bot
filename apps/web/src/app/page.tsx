@@ -325,11 +325,8 @@ export default function TodayPage() {
   const generating = GENERATING.has(status);
   const pending =
     data?.draft?.status === 'pending' && status === 'pending_approval';
-  const canGenerate =
-    !generating &&
-    (!data?.run ||
-      ['published', 'skipped', 'failed'].includes(status) ||
-      status === 'no_run');
+  // Allow a new Generate whenever the pipeline is idle (supersedes pending drafts).
+  const canGenerate = !generating;
   const winnerTitle =
     data?.run?.winnerJson?.winner?.title || data?.run?.winnerJson?.title;
 

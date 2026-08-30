@@ -82,6 +82,22 @@ export function stripNullBytes(value: string) {
   return value.replace(/\u0000/g, '');
 }
 
+/**
+ * Strip LLM habits that look bad on LinkedIn:
+ * - backticks → **bold** markers (later converted to Unicode)
+ * - em/en dashes and spaced hyphen pauses → commas
+ */
+export function normalizeLinkedInProse(input: string) {
+  return input
+    .replace(/`([^`\n]+)`/g, '**$1**')
+    .replace(/\s*[\u2014\u2013]\s*/g, ', ')
+    .replace(/\s+-\s+/g, ', ')
+    .replace(/,{2,}/g, ',')
+    .replace(/,\s*\./g, '.')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 function styleChunk(text: string, style: Style) {
   if (style === 'bold') return toBoldSans(text);
   if (style === 'italic') return toItalic(text);
@@ -90,7 +106,7 @@ function styleChunk(text: string, style: Style) {
 
 /** Convert Typegrow-style markdown (**bold**, *italic*) to Unicode. */
 export function applyMarkdownFormat(input: string) {
-  const { text, restore } = protectTokens(input);
+  const { text, restore } = protectTokens(normalizeLinkedInProse(input));
   const formatted = text
     .replace(/\*\*\*(.+?)\*\*\*/g, (_, inner) => styleChunk(inner, 'boldItalic'))
     .replace(/\*\*(.+?)\*\*/g, (_, inner) => styleChunk(inner, 'bold'))
@@ -178,7 +194,7 @@ function styleKeepingTokens(text: string, style: Style) {
 }
 
 export function formatLinkedInPost(post: string) {
-  const { body, tags } = splitHashtagFooter(post);
+  const { body, tags } = splitHashtagFooter(normalizeLinkedInProse(post));
   const converted = applyMarkdownFormat(body);
   const lines = converted.split('\n');
   const first = lines.findIndex((l) => l.trim());

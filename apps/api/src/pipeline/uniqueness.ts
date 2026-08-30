@@ -15,8 +15,8 @@ export class UsedIndex {
   }
 
   matchesPost(text: string, hook?: string) {
-    if (hook && this.hooks.some((h) => similarText(hook, h, 0.72))) return true;
-    return this.posts.some((p) => similarText(text, p, 0.5));
+    if (hook && this.hooks.some((h) => similarHook(hook, h))) return true;
+    return this.posts.some((p) => similarText(text, p, 0.72));
   }
 
   unusedStories<T extends { title: string; link: string }>(stories: T[]): T[] {
@@ -115,10 +115,29 @@ export function similarText(a: string, b: string, threshold: number): boolean {
   const nb = normalizeText(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  if (na.length > 80 && nb.length > 80 && na.slice(0, 160) === nb.slice(0, 160)) {
+  // Only treat long shared openings as duplicates (avoids "same niche vocabulary" false positives).
+  if (
+    na.length > 140 &&
+    nb.length > 140 &&
+    na.slice(0, 200) === nb.slice(0, 200)
+  ) {
     return true;
   }
   return jaccard(significantTokens(a), significantTokens(b)) >= threshold;
+}
+
+/** Hooks are short — require a stronger match than full posts. */
+export function similarHook(a: string, b: string): boolean {
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const ta = significantTokens(a);
+  const tb = significantTokens(b);
+  if (ta.size <= 4 || tb.size <= 4) {
+    return jaccard(ta, tb) >= 0.9;
+  }
+  return jaccard(ta, tb) >= 0.84;
 }
 
 type WinnerJson = {
@@ -128,10 +147,18 @@ type WinnerJson = {
 };
 
 export async function loadUsedIndex(prisma: PrismaService): Promise<UsedIndex> {
+  // Only drafts that actually occupied the feed / approval queue.
+  // Skipped, failed, and rejected regenerations must not poison uniqueness.
   const runs = await prisma.run.findMany({
+    where: {
+      status: {
+        in: ['published', 'pending_approval', 'publishing', 'regenerating'],
+      },
+    },
     select: {
       winnerJson: true,
       drafts: {
+        where: { status: { in: ['pending', 'approved'] } },
         select: {
           sourceLink: true,
           sourceTitle: true,

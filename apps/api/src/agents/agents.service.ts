@@ -354,14 +354,16 @@ HUMOUR (non-negotiable):
 Rules:
 - Hook: one short headline about THIS story (name the tool / CVE / release)
 - Body: EXACTLY two long paragraphs of flowing prose (~100–120 words each), separated by a blank line
-- Paragraph 1: what shipped / why it matters, with specific names (engine, API, version) — and a smirk
-- Paragraph 2: what to do this week (upgrade, pin, swap a client, add a CI check) — still sarcastic
+- Paragraph 1: what shipped / why it matters, with specific names (engine, API, version), and a smirk
+- Paragraph 2: what to do this week (upgrade, pin, swap a client, add a CI check), still sarcastic
 - End the second paragraph with one question
 - 5–8 hashtags after the question
 - NEVER paste "Article URL", "Comments URL", Points, or HN score dumps
 - Do NOT invent fake metrics, clients, or personal stories
 - Never use: synergy, disrupt, game-changer, revolutionary, "here's the thing", "let's dive in"
 - Forbidden: bullet lists, numbered lists, one sentence per line, "BRIEF and BIG" short-line layout
+- No em dashes, en dashes, or spaced hyphen pauses (use commas / periods / colons instead)
+- No Markdown backticks. Emphasize tool names, versions, and commands with **bold** or *italic* only
 - This story has not been posted yet. Write a fresh take, not a recap of an earlier post.
 
 Return ONLY JSON:
@@ -476,12 +478,13 @@ LAYOUT (~240 words):
 - NEVER copy Article URL / Comments URL / Points / HN metadata
 - Do not invent fake metrics or personal stories
 - LinkedIn has no rich text: use **bold** and *italic* Markdown markers only (the app converts them to Unicode)
+- No backticks. No em/en dashes or spaced hyphen pauses (comma / period / colon instead)
 
 Return ONLY JSON:
-{"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"ONE concrete photoreal scene that depicts THIS article topic (people, desk, tools) — never abstract glowing orbs/lens flares","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
+{"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"ONE concrete photoreal scene that depicts THIS article topic (people, desk, tools), never abstract glowing orbs/lens flares","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
       : `You are the Voice Agent for Prathamesh Patil.
 
-Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it — funny, a bit savage, still useful.
+Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it: funny, a bit savage, still useful.
 
 LAYOUT (~220–280 words):
 - Line 1: short hook wrapped in **double asterisks** naming the tool/CVE/release. Snark is good.
@@ -502,9 +505,11 @@ HUMOUR (if the post could be a press release, rewrite it):
 
 MARKDOWN (we convert it to LinkedIn Unicode):
 - Wrap the hook line in **double asterisks**
-- Bold 1–2 key phrases (version, CVE, tool name)
+- Bold 1–2 key phrases (version, CVE, tool name, command)
 - Italicize one aside with *single asterisks*
 - Never wrap hashtags or URLs
+- Never use backticks (\`code\`). If you would write \`vitest.config.ts\`, write **vitest.config.ts** instead
+- Never use em dashes (—), en dashes (–), or a spaced hyphen as a pause. Use a comma, period, or colon
 
 CRITICAL: Mimic the REAL writing samples (rhythm, honesty, dry humour). Do NOT copy their topics verbatim. Do NOT invent fake personal stories.
 
@@ -721,7 +726,8 @@ Every key is required in the JSON: post_text (min ~400 chars, two paragraphs wit
 Rules:
 - Return ONLY JSON: {"tweet":"..."}
 - Max 240 characters in "tweet" (a source URL may be appended later; stay under 240)
-- Plain text only — no Markdown, no **bold**, no Unicode fancy letters
+- Plain text only: no Markdown, no **bold**, no backticks, no Unicode fancy letters
+- No em dashes, en dashes, or spaced hyphen pauses (use commas or periods)
 - Same angle as the LinkedIn post, but punchy: hook + one concrete takeaway + optional dry humour
 - Max one hashtag (or none)
 - No "Thread:" / numbering / "1/"
@@ -757,8 +763,11 @@ Rules:
   /** Fit body (+ optional URL counted as 23 for t.co) into ≤280. */
   private finalizeTweet(raw: string, link?: string): string {
     const cleaned = fromUnicodeVariant(raw)
+      .replace(/`([^`]+)`/g, '$1')
       .replace(/\*\*/g, '')
       .replace(/\*/g, '')
+      .replace(/\s*[\u2014\u2013]\s*/g, ', ')
+      .replace(/\s+-\s+/g, ', ')
       .replace(/\s+/g, ' ')
       .trim();
     const url = (link || '').trim();
