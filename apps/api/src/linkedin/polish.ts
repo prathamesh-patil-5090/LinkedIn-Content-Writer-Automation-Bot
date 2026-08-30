@@ -16,7 +16,9 @@ export function polishDraft(opts: {
   const withTags = withHashtagFooter(opts.postText, hashtags);
   return {
     postText: stripNullBytes(formatLinkedInPost(withTags)),
-    hook: stripNullBytes(opts.hook.trim()),
+    hook: stripNullBytes(
+      formatLinkedInPost(opts.hook.trim()).split('\n')[0] || opts.hook.trim(),
+    ),
     hashtags,
   };
 }

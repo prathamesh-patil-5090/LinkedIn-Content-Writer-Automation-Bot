@@ -64,6 +64,9 @@ export class PipelineService {
       });
     }
 
+    // After a crash/restart, DB can still say "writing" while nothing is running.
+    await this.clearOrphanedGenerating();
+
     if (triggeredBy === 'cron') {
       const posted = await this.postsPublishedToday();
       if (posted >= POSTS_PER_DAY) {
@@ -80,12 +83,20 @@ export class PipelineService {
         : [...GENERATING_STATUSES, 'pending_approval'];
     const inFlight = await this.prisma.run.findFirst({
       where: { status: { in: blocking } },
+      orderBy: { createdAt: 'desc' },
     });
     if (inFlight) {
-      throw Object.assign(
-        new Error('A run is already in flight (generating or awaiting approval)'),
-        { status: 409 },
-      );
+      // Manual Generate: replace the stuck/waiting draft instead of hard-blocking.
+      if (triggeredBy === 'manual') {
+        await this.supersedeInFlight(inFlight.id, inFlight.status);
+      } else {
+        throw Object.assign(
+          new Error(
+            'A run is already in flight (generating or awaiting approval)',
+          ),
+          { status: 409 },
+        );
+      }
     }
 
     const run = await this.prisma.run.create({
@@ -102,33 +113,95 @@ export class PipelineService {
     return run;
   }
 
+  /** Mark generating rows failed when the in-process pipeline is idle. */
+  private async clearOrphanedGenerating() {
+    if (this.running) return;
+    const result = await this.prisma.run.updateMany({
+      where: { status: { in: [...GENERATING_STATUSES] } },
+      data: {
+        status: 'failed',
+        errorMessage: 'Cleared orphaned run (pipeline was not running)',
+      },
+    });
+    if (result.count > 0) {
+      this.log.warn(`Cleared ${result.count} orphaned generating run(s)`);
+      await this.prisma.draft.updateMany({
+        where: {
+          status: 'pending',
+          run: { status: 'failed' },
+        },
+        data: { status: 'rejected', feedback: 'orphaned' },
+      });
+    }
+  }
+
+  private async supersedeInFlight(runId: string, status: string) {
+    this.log.log(`Superseding in-flight run ${runId} (${status})`);
+    if (GENERATING_STATUSES.includes(status as never)) {
+      this.cancelled.add(runId);
+    }
+    await this.prisma.run.update({
+      where: { id: runId },
+      data: {
+        status: status === 'pending_approval' ? 'skipped' : 'failed',
+        errorMessage:
+          status === 'pending_approval'
+            ? 'Superseded by a new Generate'
+            : 'Superseded / stopped for a new Generate',
+      },
+    });
+    await this.prisma.draft.updateMany({
+      where: { runId, status: 'pending' },
+      data: {
+        status: 'rejected',
+        feedback:
+          status === 'pending_approval' ? 'superseded' : 'stopped',
+      },
+    });
+  }
+
   async cancel(runId?: string) {
     const target =
       runId ||
       this.activeRunId ||
       (
         await this.prisma.run.findFirst({
-          where: { status: { in: [...GENERATING_STATUSES] } },
+          where: {
+            status: { in: [...GENERATING_STATUSES, 'pending_approval'] },
+          },
           orderBy: { createdAt: 'desc' },
         })
       )?.id;
 
     if (!target) {
-      throw Object.assign(new Error('No generating run to stop'), {
+      throw Object.assign(new Error('No in-flight run to stop'), {
         status: 404,
       });
     }
 
     this.cancelled.add(target);
     this.running = false;
+    if (this.activeRunId === target) this.activeRunId = null;
+
+    const existing = await this.prisma.run.findUnique({
+      where: { id: target },
+      select: { status: true },
+    });
+    const asSkip = existing?.status === 'pending_approval';
 
     await this.prisma.run.update({
       where: { id: target },
-      data: { status: 'failed', errorMessage: 'Stopped by user' },
+      data: {
+        status: asSkip ? 'skipped' : 'failed',
+        errorMessage: asSkip ? 'Skipped by user' : 'Stopped by user',
+      },
     });
     await this.prisma.draft.updateMany({
       where: { runId: target, status: 'pending' },
-      data: { status: 'rejected', feedback: 'stopped' },
+      data: {
+        status: 'rejected',
+        feedback: asSkip ? 'skipped' : 'stopped',
+      },
     });
 
     return { ok: true, runId: target };
@@ -692,9 +765,14 @@ export class PipelineService {
         voice.latencyMs,
       );
       if (used.matchesPost(voice.data.post_text, voice.data.hook)) {
-        throw new Error(
-          'Generated post was too similar to an earlier one — skipped to keep the feed unique',
+        // Soft fail: still ship the draft. Hard-skip was blocking valid new stories
+        // that share niche vocabulary (upgrade, Node, CI, etc.).
+        this.log.warn(
+          `Post similarity soft-warn for run ${runId}; keeping draft after rewrite retry`,
         );
+        await this.logStep(runId, 'voice', 'similarity soft-warn', {
+          hook: voice.data.hook,
+        });
       }
     }
 

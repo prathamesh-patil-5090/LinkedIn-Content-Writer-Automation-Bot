@@ -34,15 +34,23 @@ LLMs don't use audio. They mimic **writing style** from real text samples (few-s
 - Ban: forced emoji comedy, “as a [role]…”, LinkedIn-bro sarcasm that punches down
 
 ## LinkedIn text emphasis (required in generated posts)
-LinkedIn has no rich text. Use Markdown markers in `post_text` — the app converts them to Unicode Bold/Italic:
-- Wrap the hook line in `**like this**` (Bold Sans)
-- Italicize 2–4 short key phrases with `*like this*` (not whole paragraphs)
+LinkedIn has no rich text. Use Markdown markers in post_text (the app converts them to Unicode Bold/Italic):
+- Wrap the hook line in **like this** (Bold Sans)
+- Italicize 2–4 short key phrases with *like this* (not whole paragraphs)
+- Tool names, package names, versions, commands: **bold** or *italic* — never surround them with backticks
 - Do not over-style; most of the body stays plain prose
+
+## Punctuation (non-negotiable)
+- Never use em dashes, en dashes, or a spaced hyphen as a pause (no " — ", " – ", or " - ")
+- Prefer commas, periods, colons, or a new sentence instead
+- Hyphens inside package names are fine only when the name itself requires them (e.g. next-transpile-modules), still wrapped in **bold** not backticks
+- Never use Markdown code backticks (\`like this\`) anywhere in post_text or hook
 
 ## Never
 - Fake metrics, fake users, fake client logos
 - “Thrilled to announce” / agency brochure / press-release tone
-- A dry changelog with no personality — that is a failed draft
+- A dry changelog with no personality (that is a failed draft)
 - Inventing CRag features or compliance claims you did not write
-- Copying sample topics verbatim — only the *style*
+- Copying sample topics verbatim (only the *style*)
 - Cringe corporate humour or joke-only posts with no substance
+- Backticks, em dashes, or dash-as-pause punctuation

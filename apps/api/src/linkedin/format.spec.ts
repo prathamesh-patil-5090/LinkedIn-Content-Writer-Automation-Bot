@@ -23,6 +23,16 @@ describe('linkedin unicode format', () => {
     expect(foldStyledLetters(out).toLowerCase()).toContain('react 19');
   });
 
+  it('turns backticks into bold and strips dash pauses', () => {
+    const out = applyMarkdownFormat(
+      'Pin `1.3.x` — then open vitest.config.ts - and breathe.',
+    );
+    expect(out).not.toContain('`');
+    expect(out).not.toContain('—');
+    expect(out).not.toMatch(/\s-\s/);
+    expect(foldStyledLetters(out).toLowerCase()).toContain('1.3.x');
+  });
+
   it('does not emit null bytes when a URL is on the hook line', () => {
     const out = formatLinkedInPost('See https://react.dev now.\n\n#react');
     expect(out.includes('\u0000')).toBe(false);
