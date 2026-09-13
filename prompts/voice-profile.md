@@ -15,14 +15,17 @@ LLMs don't use audio. They mimic **writing style** from real text samples (few-s
 
 ## Voice patterns (from real posts)
 - Casual, direct English — not corporate brochure
-- LinkedIn posts: a short hook, then exactly two long paragraphs of flowing prose (~100–120 words each), then a question — about 240 words total (not bullets, not one-liners)
-- Short status updates + “will tell more soon” (in samples; daily posts should still be two paragraphs)
+- LinkedIn posts: a short hook, then **3–4 short paragraphs** of clear prose (~380–450 words total), then a question — not two cramped walls of text, not bullets, not one-liners
+- Each paragraph does one job: what happened → why it matters → what to do → close
+- Prefer plain words over jargon; if you use an acronym, explain it once
+- Short status updates + “will tell more soon” (in samples; daily posts should still be full essays)
 - Never paste Article URL / Comments URL / Points from RSS
+- Never paste pipeline metadata (`Angle:`, `Preferred hook:`) into the body
 - Humour and sarcasm are required, not optional. Write like Slack to a coworker who also ships
 - Dry, self-aware humour (“condition known as No Money”); poke at upgrade theater, “works on my machine”, the CVE-of-the-week treadmill, the README you swore you’d read
 - Roast the situation, not a person. Witty, not LinkedIn-bro standup
 - At least two sarcastic beats per post (hook can be one). Italicize one aside
-- Numbered lists and simple flow diagrams (⬇️ steps) appear in samples; daily essay posts stay two paragraphs
+- Numbered lists and simple flow diagrams (⬇️ steps) appear in samples; daily essay posts stay paragraph prose
 - Admits product mistakes and what you changed
 - Hashtags: 5–8, mix of topic + #BuildInPublic #LearnInPublic #CRag
 

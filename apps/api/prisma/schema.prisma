@@ -97,11 +97,133 @@ model Draft {
   feedback        String?
   createdAt       DateTime @default(now()) @map("created_at")
 
-  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run  Run               @relation(fields: [runId], references: [id], onDelete: Cascade)
+  meta ContentDraftMeta?
 
   @@unique([runId, version])
   @@index([runId, status])
   @@map("drafts")
+}
+
+model SourceEvent {
+  id               String   @id @default(uuid()) @db.Uuid
+  source           String   @default("rss") // rss | hn | github | manual
+  project          String?
+  eventType        String   @default("story") @map("event_type")
+  title            String
+  description      String   @default("")
+  link             String?
+  externalId       String?  @map("external_id")
+  payloadJson      Json?    @map("payload_json")
+  problem          String?
+  decision         String?
+  solution         String?
+  impact           String?
+  technicalContext String?  @map("technical_context")
+  occurredAt       DateTime? @map("occurred_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  opportunities ContentOpportunity[]
+
+  @@unique([source, externalId])
+  @@index([createdAt])
+  @@index([source])
+  @@map("source_events")
+}
+
+model ContentOpportunity {
+  id              String   @id @default(uuid()) @db.Uuid
+  sourceEventId   String?  @map("source_event_id") @db.Uuid
+  runId           String?  @map("run_id") @db.Uuid
+  title           String
+  link            String?
+  pillar          String   @default("engineering")
+  format          String?  // engineering_story | technical_breakdown | ...
+  contentScore    Float    @default(0) @map("content_score")
+  scoresJson      Json?    @map("scores_json")
+  anglesJson      Json?    @map("angles_json")
+  hooksJson       Json?    @map("hooks_json")
+  selectedAngle   String?  @map("selected_angle")
+  selectedHook    String?  @map("selected_hook")
+  status          String   @default("scored") // scored | selected | rejected | used
+  rejectReasons   String[] @default([]) @map("reject_reasons")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  sourceEvent SourceEvent? @relation(fields: [sourceEventId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([pillar])
+  @@index([contentScore])
+  @@map("content_opportunities")
+}
+
+model ContentDraftMeta {
+  id                 String   @id @default(uuid()) @db.Uuid
+  draftId            String   @unique @map("draft_id") @db.Uuid
+  runId              String   @map("run_id") @db.Uuid
+  pillar             String?
+  format             String?
+  contentScore       Float?   @map("content_score")
+  qualityScore       Float?   @map("quality_score")
+  authenticityScore  Float?   @map("authenticity_score")
+  aiGenericnessScore Float?   @map("ai_genericness_score")
+  repetitionScore    Float?   @map("repetition_score")
+  diversityScore     Float?   @map("diversity_score")
+  scoresJson         Json?    @map("scores_json")
+  decision           String?  // approved | rejected | regenerated
+  decisionReasons    String[] @default([]) @map("decision_reasons")
+  decisionJson       Json?    @map("decision_json")
+  selectedAngle      String?  @map("selected_angle")
+  selectedHook       String?  @map("selected_hook")
+  promptVersions     Json?    @map("prompt_versions")
+  regenerationCount  Int      @default(0) @map("regeneration_count")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  draft Draft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([decision])
+  @@index([pillar])
+  @@map("content_draft_meta")
+}
+
+model WritingProfile {
+  id        String   @id @default(uuid()) @db.Uuid
+  version   Int      @default(1)
+  profileJson Json   @map("profile_json")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([isActive])
+  @@map("writing_profiles")
+}
+
+model PublishedPostPerformance {
+  id              String   @id @default(uuid()) @db.Uuid
+  runId           String   @unique @map("run_id") @db.Uuid
+  draftId         String?  @map("draft_id") @db.Uuid
+  linkedinPostUrn String?  @map("linkedin_post_urn")
+  pillar          String?
+  format          String?
+  hook            String?
+  contentScore    Float?   @map("content_score")
+  qualityScore    Float?   @map("quality_score")
+  impressions     Int      @default(0)
+  reactions       Int      @default(0)
+  comments        Int      @default(0)
+  reposts         Int      @default(0)
+  clicks          Int      @default(0)
+  profileViews    Int      @default(0) @map("profile_views")
+  followersGained Int      @default(0) @map("followers_gained")
+  publishedAt     DateTime? @map("published_at")
+  metricsJson     Json?    @map("metrics_json")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([pillar])
+  @@index([publishedAt])
+  @@map("published_post_performance")
 }
 
 model PipelineLog {

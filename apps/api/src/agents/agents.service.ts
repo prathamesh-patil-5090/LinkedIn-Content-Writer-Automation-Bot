@@ -66,6 +66,15 @@ export class AgentsService {
     return this.config.get<string>(key) || fallback;
   }
 
+  private draftBrief(): string {
+    const p = path.resolve(process.cwd(), '../../prompts/draft-v1.md');
+    try {
+      return fs.readFileSync(p, 'utf8');
+    } catch {
+      return 'Write longer, clearer LinkedIn essays: hook + 3-4 short paragraphs + question.';
+    }
+  }
+
   private voiceProfile(): string {
     const p = path.resolve(process.cwd(), '../../prompts/voice-profile.md');
     try {
@@ -339,32 +348,31 @@ Return ONLY valid JSON. trend_score is a single number. Example:
             role: 'system',
             content: `You write LinkedIn drafts for Prathamesh Patil (JS/AI builder). Do not use <think> tags. Raw JSON only.
 
-Write TWO LinkedIn drafts for the winning story. Length ~240 words. Humour + sarcasm are mandatory.
+Write TWO LinkedIn drafts for the winning story. Target ~380-450 words. Clear first, funny second.
 
 ${styles}
 
-HUMOUR (non-negotiable):
-- Sound like a tired but funny coworker, not a changelog
-- Hook can be snarky. Example energy: "Node 22 landed. Yes, you are still on 18 and calling it 'stable'."
-- Roast upgrade theater, lockfiles, "we'll do it next sprint", README-driven development
-- At least two sarcastic beats. One *italic* aside
-- Funny AND useful. If you delete the jokes, the post should still teach something
-- No dad-joke openers. No "as developers we"
+${this.draftBrief()}
 
-Rules:
-- Hook: one short headline about THIS story (name the tool / CVE / release)
-- Body: EXACTLY two long paragraphs of flowing prose (~100–120 words each), separated by a blank line
-- Paragraph 1: what shipped / why it matters, with specific names (engine, API, version), and a smirk
-- Paragraph 2: what to do this week (upgrade, pin, swap a client, add a CI check), still sarcastic
-- End the second paragraph with one question
-- 5–8 hashtags after the question
-- NEVER paste "Article URL", "Comments URL", Points, or HN score dumps
+HUMOUR (required, light):
+- Tired coworker energy, not a changelog
+- At least two sarcastic beats and one *italic* aside
+- If you delete the jokes, the post must still teach something
+
+STRUCTURE (non-negotiable):
+- Hook: short headline about THIS story (tool / report / release). Never paste "Angle:" or "Preferred hook:"
+- Body: 3 or 4 short paragraphs with a blank line between each
+  1) What the source says, in plain English
+  2) Why a JS/AI builder should care (concrete risk or opportunity)
+  3) One clear action for this week (pin, test, CI check, read a section)
+  4) Optional teammate-style wrap-up + closing question
+- End with one clear question, then 5-8 hashtags
+- Prefer short sentences. Explain once. No press-release tone.
+- NEVER paste Article URL / Comments URL / Points / HN dumps / pipeline metadata
 - Do NOT invent fake metrics, clients, or personal stories
-- Never use: synergy, disrupt, game-changer, revolutionary, "here's the thing", "let's dive in"
-- Forbidden: bullet lists, numbered lists, one sentence per line, "BRIEF and BIG" short-line layout
-- No em dashes, en dashes, or spaced hyphen pauses (use commas / periods / colons instead)
-- No Markdown backticks. Emphasize tool names, versions, and commands with **bold** or *italic* only
-- This story has not been posted yet. Write a fresh take, not a recap of an earlier post.
+- Ban: synergy, disrupt, game-changer, revolutionary, "here's the thing", "let's dive in"
+- Forbidden: bullet lists, numbered lists, one-sentence-per-line "BRIEF and BIG" layout
+- No em/en dashes or spaced hyphen pauses; no backticks (use **bold** / *italic*)
 
 Return ONLY JSON:
 ${styleJson}`,
@@ -402,7 +410,7 @@ ${styleJson}`,
     const title = winner.title.replace(/\s+/g, ' ').trim();
     const why = isHnMetadata(winner.why_it_matters || '')
       ? ''
-      : cleanStoryBlurb(title, winner.why_it_matters || '');
+      : cleanStoryBlurb(title, stripBriefLeak(winner.why_it_matters || ''));
     return { title, why };
   }
 
@@ -420,8 +428,12 @@ ${styleJson}`,
 
   private storyPost(winner: z.infer<typeof RankSchema>['winner']) {
     const { title, why } = this.storyFacts(winner);
-    const hook = title.length > 88 ? `${title.slice(0, 85).trim()}…` : title;
-    const take = why && why !== `${title}.` ? why : '';
+    const hook =
+      title.length > 88 ? `${title.slice(0, 85).trim()}…` : title;
+    const take =
+      why && why !== `${title}.`
+        ? why
+        : `${title} is worth a careful read if it touches your stack.`;
     const host = (() => {
       try {
         return new URL(winner.link).hostname.replace(/^www\./, '');
@@ -430,20 +442,23 @@ ${styleJson}`,
       }
     })();
     const p1 = [
-      take ||
-        `${title} showed up on the timeline, which is usually how we discover work we already promised to do.`,
-      host.includes('github')
-        ? `It is a repo, not a Ted Talk. Open the README before you quote a thread. The useful bit is almost always one command, one lockfile line, or one CI check — not the star count you will screenshot for Slack.`
-        : `Read the notes, not the HN scorecard. The useful bit is almost always one command, one lockfile line, or one CI check.`,
-      `Name the API, the version, the failure mode. If you cannot name it, you are just vibes-posting, and we have enough of that.`,
+      take,
+      host
+        ? `The source is ${host}. Open the actual notes before you quote a thread summary.`
+        : `Open the actual notes before you quote a thread summary.`,
+      `Name the product, the version, and the failure mode you care about. If you cannot name those three, you are summarizing vibes, not shipping a change.`,
     ].join(' ');
     const p2 = [
-      `If this lands in your stack, do the boring pass nobody puts on LinkedIn: pin the version, run the tests you already have, write down the first error.`,
-      `*Yes, including the upgrade you swore was next sprint.*`,
-      `Leave a CI note so the next person does not rediscover it at 1am and call it "research." Then tell the team what you changed, not that you "looked into it."`,
-      `What are you actually shipping this week, besides opinions?`,
+      `Here is the useful shape of a response: pick one concrete action you can finish this week.`,
+      `Pin a version, add one CI check, or write down the first error you hit when you try the upgrade path.`,
+      `*Yes, including the upgrade you parked for "next sprint."*`,
     ].join(' ');
-    return { hook, body: `${p1}\n\n${p2}` };
+    const p3 = [
+      `Then tell the team what changed in plain language: what you touched, what broke, what you verified.`,
+      `Leave a short note in the PR or runbook so the next person does not rediscover it at 1am and call it research.`,
+      `What are you actually shipping this week that makes this safer or clearer for your stack?`,
+    ].join(' ');
+    return { hook, body: `${p1}\n\n${p2}\n\n${p3}` };
   }
 
   async applyVoice(opts: {
@@ -465,57 +480,54 @@ ${styleJson}`,
 
     const isRegen = Boolean(opts.feedback);
     const system = isRegen
-      ? `You are regenerating a LinkedIn post for Prathamesh Patil after human rejection.
+      ? `You are regenerating a LinkedIn post for Prathamesh Patil after rejection / QC feedback.
 
-Produce a meaningfully different draft that addresses the feedback. Keep it funny and sarcastic.
+Produce a meaningfully different draft that addresses the feedback. Clear first, funny second.
 
-LAYOUT (~240 words):
-- Line 1: short hook wrapped in **double asterisks**, then a blank line
-- Then EXACTLY two long paragraphs of flowing prose (~100–120 words each), separated by one blank line
-- Para 1 = what shipped / why it matters, with a smirk. Para 2 = what to do this week, still sarcastic
-- At least two sarcastic beats. One *italic* aside
-- End the second paragraph with one question, then 5–8 hashtags
-- NEVER copy Article URL / Comments URL / Points / HN metadata
+LAYOUT (~380-450 words):
+- Line 1: short hook in **double asterisks**, then a blank line
+- Then 3 or 4 short paragraphs of plain English (blank line between each)
+- Para 1 = what the source says. Para 2 = why builders should care. Para 3 = what to do this week. Para 4 optional wrap-up + question
+- Never paste "Angle:", "Preferred hook:", Article URL, Comments URL, Points, or HN metadata
 - Do not invent fake metrics or personal stories
-- LinkedIn has no rich text: use **bold** and *italic* Markdown markers only (the app converts them to Unicode)
-- No backticks. No em/en dashes or spaced hyphen pauses (comma / period / colon instead)
+- LinkedIn has no rich text: use **bold** and *italic* only
+- No backticks. No em/en dashes or spaced hyphen pauses
 
 Return ONLY JSON:
 {"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"ONE concrete photoreal scene that depicts THIS article topic (people, desk, tools), never abstract glowing orbs/lens flares","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
       : `You are the Voice Agent for Prathamesh Patil.
 
-Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it: funny, a bit savage, still useful.
+Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it: clear, useful, lightly sarcastic.
 
-LAYOUT (~220–280 words):
-- Line 1: short hook wrapped in **double asterisks** naming the tool/CVE/release. Snark is good.
-- Then EXACTLY two long paragraphs of flowing prose (~100–120 words each)
-- Separate the two paragraphs with one blank line
-- Para 1: facts + sarcasm. Para 2: what to do this week + sarcasm
-- End with one question, then 5–8 hashtags
-- Stay under 3000 characters total (LinkedIn limit)
-- NEVER copy Article URL, Comments URL, Points, or "# Comments"
+LAYOUT (~380-450 words, under 3000 characters):
+- Line 1: short hook in **double asterisks** naming the tool/report/release
+- Then 3 or 4 short paragraphs with blank lines between them
+  1) Plain-English summary of what happened
+  2) Why a JS/AI builder should care
+  3) One concrete action for this week
+  4) Optional teammate-style close + one question
+- Then 5-8 hashtags
+- Clarity beats cleverness. Short sentences. Explain once.
+- NEVER copy Article URL, Comments URL, Points, "# Comments", "Angle:", or "Preferred hook:"
 
 HUMOUR (if the post could be a press release, rewrite it):
-- Coworker Slack energy. Tired. Specific. Mean to the situation, not a person
+- Coworker Slack energy. Specific. Mean to the situation, not a person
 - At least TWO sarcastic beats (hook can count as one)
-- One *italic* aside like *yes, including the migrate you swore you'd do last quarter*
-- Roast: upgrade theater, "stable" as an excuse, lockfiles, README archaeology, CVE-of-the-week
-- Still teach: name the version, the API, the command
+- One *italic* aside
+- Still teach: name the version, the API, the command when known
 - Forbidden: "here's the thing", "let's dive in", "it's worth noting", "as developers we", game-changer, thrilled to announce
 
 MARKDOWN (we convert it to LinkedIn Unicode):
 - Wrap the hook line in **double asterisks**
-- Bold 1–2 key phrases (version, CVE, tool name, command)
+- Bold 1-2 key phrases (version, tool, command)
 - Italicize one aside with *single asterisks*
 - Never wrap hashtags or URLs
-- Never use backticks (\`code\`). If you would write \`vitest.config.ts\`, write **vitest.config.ts** instead
-- Never use em dashes (—), en dashes (–), or a spaced hyphen as a pause. Use a comma, period, or colon
+- Never use backticks
+- Never use em dashes, en dashes, or spaced hyphen pauses
 
-CRITICAL: Mimic the REAL writing samples (rhythm, honesty, dry humour). Do NOT copy their topics verbatim. Do NOT invent fake personal stories.
+CRITICAL: Mimic REAL writing samples (rhythm, honesty). Do NOT copy their topics. Do NOT invent fake personal stories.
 
-image_prompt rules (critical for the LinkedIn thumbnail):
-- Describe ONE specific photoreal scene that a stranger would recognize as THIS story (use objects from the article: agents→multiple sticky notes merging into one board; CVE→laptop with advisory; npm release→changelog on second monitor)
-- Ban: abstract CGI, glowing orbs, lens flares, neural-net spheres, generic "AI concept art"
+image_prompt: ONE specific photoreal scene for THIS story. Ban abstract CGI / glowing orbs.
 
 Voice profile:
 ${profile}
@@ -536,7 +548,8 @@ Return ONLY JSON:
             role: 'user',
             content: `===== REAL VOICE SAMPLES =====\n${samplesText}\n===== END SAMPLES =====\n\nContent drafts:\n${JSON.stringify(opts.drafts)}\n\nWinner:\n${JSON.stringify(opts.winner)}\n\nFeedback:\n${opts.feedback || '(none)'}\n\nDo not repeat these previous posts (new story, new argument, new hook):\n${(opts.avoidPosts || []).slice(0, 6).join('\n---\n') || '(none)'}
 
-Every key is required in the JSON: post_text (min ~400 chars, two paragraphs with **hook** and *key phrases*), hook, image_prompt, hashtags, chosen_style, source_title, source_link.`,
+Every key is required in the JSON: post_text (min ~900 chars, hook + 3-4 short paragraphs + question), hook, image_prompt, hashtags, chosen_style, source_title, source_link.
+Never include the strings "Angle:" or "Preferred hook:" in post_text.`,
           },
         ],
       });
@@ -597,32 +610,35 @@ Every key is required in the JSON: post_text (min ~400 chars, two paragraphs wit
       pickStr('hook', ' Hook', 'title') ||
       bestDraft?.hook ||
       opts.winner.title.slice(0, 120);
+    hook = stripBriefLeak(hook);
 
     let postText =
       pickStr('post_text', 'postText', 'text', 'body', 'content') ||
       (bestDraft
         ? `${bestDraft.hook}\n\n${bestDraft.body}`.trim()
         : '');
+    postText = stripBriefLeak(postText);
+
+    const cleanWhy = stripBriefLeak(opts.winner.why_it_matters || '');
 
     // Model sometimes returns only chosen_style / short fragment.
-    if (postText.length < 200 && bestDraft?.body) {
-      const why = opts.winner.why_it_matters || '';
+    if (postText.length < 280 && bestDraft?.body) {
       postText = [
         hook,
         '',
-        bestDraft.body.trim(),
+        stripBriefLeak(bestDraft.body.trim()),
         '',
-        why
-          ? `${why} Worth shipping a concrete change this week — what would you try first?`
-          : 'Worth shipping a concrete change this week — what would you try first?',
+        cleanWhy
+          ? `${cleanWhy} Worth shipping a concrete change this week. What would you try first?`
+          : 'Worth shipping a concrete change this week. What would you try first?',
       ]
         .filter((line, i, arr) => !(line === '' && arr[i - 1] === ''))
         .join('\n')
         .trim();
     }
 
-    if (postText.length < 200) {
-      const pad = opts.winner.why_it_matters || opts.winner.title;
+    if (postText.length < 280) {
+      const pad = cleanWhy || opts.winner.title;
       postText = `${postText}\n\n${pad}\n\nWhat would you ship first after reading this?`.trim();
     }
 
@@ -813,4 +829,15 @@ Rules:
     const sp = cut.lastIndexOf(' ');
     return `${(sp > 24 ? cut.slice(0, sp) : cut).trim()}…`;
   }
+}
+
+/** Drop pipeline brief labels that must never appear in published copy. */
+function stripBriefLeak(text: string): string {
+  return text
+    .replace(/^\s*Angle:\s*.+$/gim, '')
+    .replace(/^\s*Preferred hook:\s*.+$/gim, '')
+    .replace(/\bAngle:\s*/gi, '')
+    .replace(/\bPreferred hook:\s*/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }

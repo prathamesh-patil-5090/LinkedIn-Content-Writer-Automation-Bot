@@ -29,6 +29,12 @@ type TodayResponse = {
       winner?: { title?: string; link?: string };
       title?: string;
       link?: string;
+      intelligence?: {
+        pillar?: string;
+        contentScore?: number;
+        selectedAngle?: string;
+        selectedHook?: string;
+      };
     } | null;
     errorMessage?: string | null;
   } | null;
@@ -45,6 +51,20 @@ type TodayResponse = {
     status: string;
     version?: number;
   } | null;
+  meta?: {
+    pillar?: string | null;
+    format?: string | null;
+    contentScore?: number | null;
+    qualityScore?: number | null;
+    authenticityScore?: number | null;
+    aiGenericnessScore?: number | null;
+    decision?: string | null;
+    decisionReasons?: string[];
+    selectedAngle?: string | null;
+    selectedHook?: string | null;
+    regenerationCount?: number;
+  } | null;
+  contentConfig?: { autonomousPublish?: boolean } | null;
 };
 
 const GENERATING = new Set([
@@ -75,7 +95,7 @@ export default function TodayPage() {
   const loadToday = useCallback(async () => {
     const today = await apiFetch<TodayResponse>('/runs/today');
     setData(today);
-    if (today.draft?.status === 'pending') {
+    if (today.draft?.status === 'pending' || today.draft?.status === 'auto_approved') {
       setText(today.draft.postText || '');
       setTweet(today.draft.tweetText || '');
     } else if (!today.draft) {
@@ -113,7 +133,7 @@ export default function TodayPage() {
     }
     const status = data?.run?.status;
     const waitingForImage =
-      status === 'pending_approval' &&
+      (status === 'pending_approval' || status === 'auto_approved') &&
       Boolean(data?.draft?.postText) &&
       !data?.draft?.imageUrl;
     if (waitingForImage && !imageWaitStarted.current) {
@@ -323,12 +343,16 @@ export default function TodayPage() {
 
   const status = data?.run?.status ?? 'no_run';
   const generating = GENERATING.has(status);
+  const autonomous = data?.contentConfig?.autonomousPublish !== false;
   const pending =
     data?.draft?.status === 'pending' && status === 'pending_approval';
+  const showApprove = pending && !autonomous;
   // Allow a new Generate whenever the pipeline is idle (supersedes pending drafts).
   const canGenerate = !generating;
   const winnerTitle =
     data?.run?.winnerJson?.winner?.title || data?.run?.winnerJson?.title;
+  const meta = data?.meta;
+  const intel = data?.run?.winnerJson?.intelligence;
 
   return (
     <AppShell
@@ -336,7 +360,9 @@ export default function TodayPage() {
       email={me.email}
       kicker={
         me.linkedinConnected
-          ? 'Pick a story, generate, then publish.'
+          ? data?.contentConfig?.autonomousPublish !== false
+            ? 'Autonomous mode: score → QC → publish. Dashboard is observability.'
+            : 'Kill-switch on: Approve required before publish.'
           : 'LinkedIn is not connected — connect it in Settings.'
       }
     >
@@ -345,7 +371,15 @@ export default function TodayPage() {
           <section className="card stack status-card">
             <div className="btn-row" style={{ alignItems: 'center' }}>
               <span
-                className={`pill ${status === 'failed' ? 'bad' : status === 'published' ? 'ok' : generating ? 'warn' : ''}`}
+                className={`pill ${
+                  status === 'failed' || status === 'rejected'
+                    ? 'bad'
+                    : status === 'published' || status === 'auto_approved'
+                      ? 'ok'
+                      : generating
+                        ? 'warn'
+                        : ''
+                }`}
               >
                 {status.replaceAll('_', ' ')}
               </span>
@@ -356,6 +390,55 @@ export default function TodayPage() {
                 </span>
               ) : null}
             </div>
+            {(meta || intel) && (
+              <div className="stack" style={{ gap: 6, fontSize: 13 }}>
+                {(meta?.pillar || intel?.pillar) && (
+                  <div>
+                    Pillar:{' '}
+                    <strong>{meta?.pillar || intel?.pillar}</strong>
+                    {meta?.format ? ` · ${meta.format}` : ''}
+                  </div>
+                )}
+                <div className="btn-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+                  {meta?.contentScore != null || intel?.contentScore != null ? (
+                    <span className="pill">
+                      content {meta?.contentScore ?? intel?.contentScore}
+                    </span>
+                  ) : null}
+                  {meta?.qualityScore != null ? (
+                    <span className="pill">quality {meta.qualityScore}</span>
+                  ) : null}
+                  {meta?.authenticityScore != null ? (
+                    <span className="pill">
+                      authenticity {meta.authenticityScore}
+                    </span>
+                  ) : null}
+                  {meta?.aiGenericnessScore != null ? (
+                    <span className="pill">
+                      ai-generic {meta.aiGenericnessScore}
+                    </span>
+                  ) : null}
+                  {meta?.regenerationCount != null &&
+                  meta.regenerationCount > 0 ? (
+                    <span className="pill">
+                      regen ×{meta.regenerationCount}
+                    </span>
+                  ) : null}
+                </div>
+                {meta?.decisionReasons?.length ? (
+                  <ul className="muted" style={{ margin: 0, paddingLeft: 18 }}>
+                    {meta.decisionReasons.slice(0, 6).map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {(meta?.selectedAngle || intel?.selectedAngle) && (
+                  <p className="muted" style={{ margin: 0 }}>
+                    Angle: {meta?.selectedAngle || intel?.selectedAngle}
+                  </p>
+                )}
+              </div>
+            )}
             {generating ? (
               <p className="muted" style={{ margin: 0 }}>
                 Pipeline running… updates every few seconds.
@@ -561,30 +644,40 @@ export default function TodayPage() {
                 {busy === 'stop' ? 'Stopping…' : 'Stop'}
               </button>
             ) : null}
-            <button
-              className="btn"
-              disabled={!pending || busy !== null}
-              onClick={() => void saveEdits()}
-            >
-              {busy === 'save' ? 'Saving…' : 'Save'}
-            </button>
-            <button
-              className="btn primary"
-              disabled={!pending || busy !== null}
-              onClick={() => void approve()}
-            >
-              {busy === 'approve' ? 'Publishing…' : 'Approve'}
-            </button>
-            <button
-              className="btn"
-              disabled={!pending || busy !== null}
-              onClick={() => void reject()}
-            >
-              {busy === 'reject' ? 'Regenerating…' : 'Reject'}
-            </button>
+            {showApprove ? (
+              <>
+                <button
+                  className="btn"
+                  disabled={!pending || busy !== null}
+                  onClick={() => void saveEdits()}
+                >
+                  {busy === 'save' ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  className="btn primary"
+                  disabled={!pending || busy !== null}
+                  onClick={() => void approve()}
+                >
+                  {busy === 'approve' ? 'Publishing…' : 'Approve'}
+                </button>
+                <button
+                  className="btn"
+                  disabled={!pending || busy !== null}
+                  onClick={() => void reject()}
+                >
+                  {busy === 'reject' ? 'Regenerating…' : 'Reject'}
+                </button>
+              </>
+            ) : null}
             <button
               className="btn ghost"
-              disabled={!pending || busy !== null}
+              disabled={
+                busy !== null ||
+                !data?.run ||
+                !['pending_approval', 'auto_approved', 'writing', 'imaging'].includes(
+                  status,
+                )
+              }
               onClick={() => void skip()}
             >
               Skip
@@ -594,7 +687,7 @@ export default function TodayPage() {
               disabled={
                 busy !== null ||
                 !data?.draft?.postText ||
-                !['published', 'pending_approval'].includes(status)
+                !['published', 'pending_approval', 'auto_approved'].includes(status)
               }
               onClick={() => void saveVoice()}
             >

@@ -12,6 +12,8 @@ export const RunStatus = z.enum([
   'regenerating',
   'skipped',
   'failed',
+  'rejected',
+  'auto_approved',
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
@@ -20,6 +22,7 @@ export const DraftStatus = z.enum([
   'approved',
   'superseded',
   'rejected',
+  'auto_approved',
 ]);
 export type DraftStatus = z.infer<typeof DraftStatus>;
 
@@ -70,3 +73,4 @@ export function isGenerating(status: RunStatus): boolean {
 
 export * from './content-types';
 export * from './linkedin-text-format';
+export * from './content-intelligence';
