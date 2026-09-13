@@ -184,6 +184,41 @@ function alreadyStyled(text: string) {
   return /[\u{1D400}-\u{1D7FF}]/u.test(text);
 }
 
+/** Compare ignoring Unicode fancy letters / markdown stars. */
+export function foldForCompare(value: string) {
+  return foldStyledLetters(value)
+    .replace(/\*+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Remove a duplicated opening title/hook (plain + bold, or pasted twice).
+ * Example:
+ *   Title
+ *
+ *   Title
+ *
+ *   body…
+ * → Title + body
+ */
+export function dedupeLeadingTitle(post: string) {
+  const lines = post.replace(/\r\n/g, '\n').split('\n');
+  const idxs: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim()) idxs.push(i);
+  }
+  if (idxs.length < 2) return post.trim();
+
+  const a = foldForCompare(lines[idxs[0]]);
+  const b = foldForCompare(lines[idxs[1]]);
+  if (!a || a !== b) return post.trim();
+
+  const next = [...lines.slice(0, idxs[0] + 1), ...lines.slice(idxs[1] + 1)];
+  return next.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /**
  * Bold the hook line, honor markdown, italicize a closing question.
  * Hashtag footer stays ASCII.
@@ -194,8 +229,10 @@ function styleKeepingTokens(text: string, style: Style) {
 }
 
 export function formatLinkedInPost(post: string) {
-  const { body, tags } = splitHashtagFooter(normalizeLinkedInProse(post));
-  const converted = applyMarkdownFormat(body);
+  const { body, tags } = splitHashtagFooter(
+    normalizeLinkedInProse(dedupeLeadingTitle(post)),
+  );
+  const converted = applyMarkdownFormat(dedupeLeadingTitle(body));
   const lines = converted.split('\n');
   const first = lines.findIndex((l) => l.trim());
   if (first >= 0 && !alreadyStyled(lines[first])) {
@@ -209,7 +246,10 @@ export function formatLinkedInPost(post: string) {
     }
     break;
   }
-  const formatted = stripNullBytes(lines.join('\n').trim());
+  // One more pass after unicode bold (plain title + bold title)
+  const formatted = stripNullBytes(
+    dedupeLeadingTitle(lines.join('\n').trim()),
+  );
   if (!tags.length) return formatted;
   return `${formatted}\n\n${tags.join(' ')}`;
 }

@@ -752,7 +752,7 @@ export class PipelineService {
         ...voiceOpts,
         feedback: [
           feedback,
-          'Rewrite from scratch. New hook, new examples, new closing question. Do not echo any previous post.',
+          'Rewrite from scratch. New hook, new examples, new closing question. Do not echo any previous post or title.',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -764,11 +764,14 @@ export class PipelineService {
         voice.data,
         voice.latencyMs,
       );
+      if (used.matchesHook(voice.data.hook)) {
+        throw new Error(
+          'Generated title/hook was too similar to an earlier one — skipped to keep the feed unique',
+        );
+      }
       if (used.matchesPost(voice.data.post_text, voice.data.hook)) {
-        // Soft fail: still ship the draft. Hard-skip was blocking valid new stories
-        // that share niche vocabulary (upgrade, Node, CI, etc.).
         this.log.warn(
-          `Post similarity soft-warn for run ${runId}; keeping draft after rewrite retry`,
+          `Post body similarity soft-warn for run ${runId}; keeping draft after rewrite retry`,
         );
         await this.logStep(runId, 'voice', 'similarity soft-warn', {
           hook: voice.data.hook,
@@ -781,6 +784,7 @@ export class PipelineService {
       hook: voice.data.hook,
       hashtags: voice.data.hashtags,
       category: contentType || normalizeBucket(winner.angle),
+      avoidHashtags: used.recentHashtags(14),
     });
     voice = {
       ...voice,

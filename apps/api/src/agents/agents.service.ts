@@ -626,9 +626,36 @@ Every key is required in the JSON: post_text (min ~400 chars, two paragraphs wit
       postText = `${postText}\n\n${pad}\n\nWhat would you ship first after reading this?`.trim();
     }
 
-    // Ensure hook is the first line of the post when missing from model.
-    if (!postText.startsWith(hook) && hook) {
+    // Ensure hook is the first line — compare folded text so **hook** / unicode
+    // bold does not cause a second plain prepend.
+    const fold = (s: string) =>
+      fromUnicodeVariant(s)
+        .replace(/\*+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    const firstLine =
+      postText.split('\n').find((l) => l.trim())?.trim() || '';
+    if (hook && fold(firstLine) !== fold(hook)) {
       postText = `${hook}\n\n${postText}`.trim();
+    }
+    // Drop accidental duplicate title lines (Title\n\nTitle\n\nBody).
+    {
+      const lines = postText.split('\n');
+      const idxs: number[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim()) idxs.push(i);
+      }
+      if (
+        idxs.length >= 2 &&
+        fold(lines[idxs[0]]) &&
+        fold(lines[idxs[0]]) === fold(lines[idxs[1]])
+      ) {
+        postText = [...lines.slice(0, idxs[0] + 1), ...lines.slice(idxs[1] + 1)]
+          .join('\n')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      }
     }
 
     let imagePrompt =

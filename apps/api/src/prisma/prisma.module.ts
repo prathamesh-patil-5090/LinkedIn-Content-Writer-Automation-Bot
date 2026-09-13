@@ -1,5 +1,6 @@
 import { Global, Logger, Module, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { reportDbFailureStandalone } from '../health/db-recovery.service';
 
 const log = new Logger('PrismaService');
 
@@ -45,10 +46,17 @@ async function createPrisma() {
         } catch (error) {
           if (!isTransientDbError(error)) throw error;
           log.warn('Database connection dropped (Neon idle) — reconnecting');
-          await prisma.$disconnect().catch(() => undefined);
-          await new Promise((r) => setTimeout(r, 800));
-          await prisma.$connect();
-          return query(args);
+          try {
+            await prisma.$disconnect().catch(() => undefined);
+            await new Promise((r) => setTimeout(r, 800));
+            await prisma.$connect();
+            return query(args);
+          } catch (retryErr) {
+            const msg =
+              retryErr instanceof Error ? retryErr.message : String(retryErr);
+            void reportDbFailureStandalone(`Query retry failed: ${msg}`);
+            throw retryErr;
+          }
         }
       },
     },
@@ -65,6 +73,8 @@ async function createPrisma() {
       await new Promise((r) => setTimeout(r, 400 * i));
     }
   }
+  const msg = last instanceof Error ? last.message : String(last);
+  await reportDbFailureStandalone(`Boot connect failed after 5 tries: ${msg}`);
   throw last;
 }
 
