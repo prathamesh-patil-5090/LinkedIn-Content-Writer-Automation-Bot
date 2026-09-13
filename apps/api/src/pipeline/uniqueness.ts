@@ -8,6 +8,8 @@ export class UsedIndex {
     readonly stories: UsedStory[],
     readonly posts: string[],
     readonly hooks: string[],
+    /** Flattened recent hashtags (most recent first). */
+    readonly hashtags: string[] = [],
   ) {}
 
   matchesStory(title: string, link: string) {
@@ -15,8 +17,20 @@ export class UsedIndex {
   }
 
   matchesPost(text: string, hook?: string) {
-    if (hook && this.hooks.some((h) => similarHook(hook, h))) return true;
+    if (hook && this.matchesHook(hook)) return true;
     return this.posts.some((p) => similarText(text, p, 0.72));
+  }
+
+  matchesHook(hook: string) {
+    if (!hook?.trim()) return false;
+    if (this.hooks.some((h) => similarHook(hook, h))) return true;
+    return this.stories.some((s) => similarHook(hook, s.title));
+  }
+
+  /** Hashtags from the last N posts (for rotation). */
+  recentHashtags(limitPosts = 12): string[] {
+    // hashtags array is already flattened newest-first per post in loadUsedIndex
+    return this.hashtags.slice(0, limitPosts * 8);
   }
 
   unusedStories<T extends { title: string; link: string }>(stories: T[]): T[] {
@@ -107,7 +121,8 @@ export function isSameStory(
   const na = normalizeText(titleA);
   const nb = normalizeText(titleB);
   if (na && na === nb) return true;
-  return jaccard(significantTokens(titleA), significantTokens(titleB)) >= 0.62;
+  // Stricter than before so near-duplicate titles don't reappear.
+  return jaccard(significantTokens(titleA), significantTokens(titleB)) >= 0.5;
 }
 
 export function similarText(a: string, b: string, threshold: number): boolean {
@@ -115,7 +130,6 @@ export function similarText(a: string, b: string, threshold: number): boolean {
   const nb = normalizeText(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  // Only treat long shared openings as duplicates (avoids "same niche vocabulary" false positives).
   if (
     na.length > 140 &&
     nb.length > 140 &&
@@ -126,18 +140,22 @@ export function similarText(a: string, b: string, threshold: number): boolean {
   return jaccard(significantTokens(a), significantTokens(b)) >= threshold;
 }
 
-/** Hooks are short — require a stronger match than full posts. */
+/** Hooks / titles are short — catch near-duplicates aggressively. */
 export function similarHook(a: string, b: string): boolean {
   const na = normalizeText(a);
   const nb = normalizeText(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) {
+    const shorter = Math.min(na.length, nb.length);
+    if (shorter >= 18) return true;
+  }
   const ta = significantTokens(a);
   const tb = significantTokens(b);
-  if (ta.size <= 4 || tb.size <= 4) {
-    return jaccard(ta, tb) >= 0.9;
+  if (ta.size <= 5 || tb.size <= 5) {
+    return jaccard(ta, tb) >= 0.72;
   }
-  return jaccard(ta, tb) >= 0.84;
+  return jaccard(ta, tb) >= 0.68;
 }
 
 type WinnerJson = {
@@ -147,39 +165,49 @@ type WinnerJson = {
 };
 
 export async function loadUsedIndex(prisma: PrismaService): Promise<UsedIndex> {
-  // Only drafts that actually occupied the feed / approval queue.
-  // Skipped, failed, and rejected regenerations must not poison uniqueness.
-  const runs = await prisma.run.findMany({
-    where: {
-      status: {
-        in: ['published', 'pending_approval', 'publishing', 'regenerating'],
-      },
-    },
+  // Stories: any run that ranked a winner (even skipped/failed) — stop title reuse.
+  const allRuns = await prisma.run.findMany({
     select: {
+      status: true,
       winnerJson: true,
+      createdAt: true,
       drafts: {
-        where: { status: { in: ['pending', 'approved'] } },
+        orderBy: { version: 'desc' },
         select: {
+          status: true,
           sourceLink: true,
           sourceTitle: true,
           postText: true,
           hook: true,
+          hashtags: true,
         },
       },
     },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
   });
 
   const stories: UsedStory[] = [];
   const posts: string[] = [];
   const hooks: string[] = [];
+  const hashtags: string[] = [];
 
-  for (const run of runs) {
+  const feedStatuses = new Set([
+    'published',
+    'pending_approval',
+    'publishing',
+    'regenerating',
+  ]);
+
+  for (const run of allRuns) {
     const w = run.winnerJson as WinnerJson | null;
     const title = w?.winner?.title || w?.title;
     const link = w?.winner?.link || w?.link;
     if (title || link) {
       stories.push({ title: title || '', link: link || '' });
     }
+
+    const countForFeed = feedStatuses.has(run.status);
     for (const d of run.drafts) {
       if (d.sourceTitle || d.sourceLink) {
         stories.push({
@@ -187,10 +215,17 @@ export async function loadUsedIndex(prisma: PrismaService): Promise<UsedIndex> {
           link: d.sourceLink || link || '',
         });
       }
+      if (d.hook) {
+        // Block duplicate titles/hooks even from skipped runs.
+        hooks.push(d.hook);
+        stories.push({ title: d.hook, link: d.sourceLink || link || '' });
+      }
+      if (!countForFeed) continue;
+      if (d.status !== 'pending' && d.status !== 'approved') continue;
       if (d.postText) posts.push(d.postText);
-      if (d.hook) hooks.push(d.hook);
+      if (d.hashtags?.length) hashtags.push(...d.hashtags);
     }
   }
 
-  return new UsedIndex(stories, posts, hooks);
+  return new UsedIndex(stories, posts, hooks, hashtags);
 }

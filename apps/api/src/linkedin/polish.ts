@@ -7,11 +7,13 @@ export function polishDraft(opts: {
   hook: string;
   hashtags: string[];
   category?: ContentType | string;
+  avoidHashtags?: string[];
 }) {
   const fromBody = splitHashtagFooter(opts.postText).tags;
   const hashtags = mergeHashtags(
     [...opts.hashtags, ...fromBody],
     opts.category,
+    opts.avoidHashtags || [],
   );
   const withTags = withHashtagFooter(opts.postText, hashtags);
   return {

@@ -8,8 +8,8 @@
     "tsConfigPath": "tsconfig.build.json",
     "assets": [
       {
-        "include": "../assets/fonts/**/*",
-        "outDir": "./dist/assets/fonts",
+        "include": "../assets/**/*",
+        "outDir": "./dist",
         "watchAssets": true
       }
     ]

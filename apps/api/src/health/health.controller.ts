@@ -1,9 +1,10 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.module';
 import { TelegramService } from '../notifications/telegram.service';
 import { MediaService } from '../media/media.service';
 import { LinkedInService } from '../linkedin/linkedin.service';
+import { DbRecoveryService } from './db-recovery.service';
 import {
   contentTypeForHour,
   cronWindowStatus,
@@ -19,6 +20,7 @@ export class HealthController {
     private readonly media: MediaService,
     private readonly linkedin: LinkedInService,
     private readonly config: ConfigService,
+    private readonly dbRecovery: DbRecoveryService,
   ) {}
 
   @Get('live')
@@ -32,6 +34,31 @@ export class HealthController {
     return { ok: body.ok, db: body.db };
   }
 
+  /** Lightweight DB probe. On failure, triggers Telegram + Render deploy (cooldown). */
+  @Get('db')
+  async db() {
+    let db: 'up' | 'down' = 'down';
+    let error: string | undefined;
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      db = 'up';
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      const recovery = await this.dbRecovery.handleFailure(error);
+      throw new ServiceUnavailableException({
+        ok: false,
+        db,
+        error,
+        recovery,
+      });
+    }
+    return {
+      ok: true,
+      db,
+      recovery: this.dbRecovery.status(),
+    };
+  }
+
   @Get()
   async check() {
     return this.snapshot();
@@ -42,8 +69,10 @@ export class HealthController {
     try {
       await this.prisma.$queryRaw`SELECT 1`;
       db = 'up';
-    } catch {
+    } catch (err) {
       db = 'down';
+      const message = err instanceof Error ? err.message : String(err);
+      void this.dbRecovery.handleFailure(message);
     }
 
     return {
@@ -69,6 +98,7 @@ export class HealthController {
         ...cronWindowStatus(),
         nextType: contentTypeForHour(cronWindowStatus().istHour, false),
       },
+      dbRecovery: this.dbRecovery.status(),
     };
   }
 }

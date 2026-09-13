@@ -56,6 +56,22 @@ describe('hashtags', () => {
     expect(tags).toContain('#BuildInPublic');
     expect(tags).toContain('#NodeJS');
   });
+
+  it('rotates away recently used topic tags', () => {
+    const tags = mergeHashtags(['#NodeJS'], 'js-lib', [
+      '#JavaScript',
+      '#TypeScript',
+      '#WebDev',
+      '#OpenSource',
+      '#Frontend',
+    ]);
+    expect(tags).toContain('#BuildInPublic');
+    expect(tags).toContain('#LearnInPublic');
+    expect(tags).toContain('#NodeJS');
+    expect(tags).toContain('#Backend');
+    expect(tags).not.toContain('#JavaScript');
+    expect(tags).not.toContain('#TypeScript');
+  });
 });
 
 describe('polishDraft', () => {

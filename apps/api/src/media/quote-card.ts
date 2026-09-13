@@ -152,8 +152,13 @@ export function kickerFrom(text: string, category?: string) {
 function fontDir() {
   const candidates = [
     join(process.cwd(), 'assets/fonts'),
+    join(process.cwd(), 'dist/assets/fonts'),
+    join(process.cwd(), 'dist/fonts'),
     join(__dirname, '../../assets/fonts'),
     join(__dirname, '../assets/fonts'),
+    join(__dirname, '../fonts'),
+    join(__dirname, '../assets/fonts/fonts'), // legacy nested nest-cli copy
+    join(__dirname, '../../assets/fonts/fonts'),
   ];
   return candidates.find((dir) => existsSync(join(dir, 'Inter-Bold.ttf')));
 }

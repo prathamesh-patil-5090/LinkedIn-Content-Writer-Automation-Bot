@@ -2,6 +2,7 @@ import {
   isSameStory,
   normalizeUrl,
   similarText,
+  similarHook,
   significantTokens,
   jaccard,
 } from './uniqueness';
@@ -25,6 +26,15 @@ describe('story uniqueness', () => {
         'https://a.dev/1',
         'Open-source maintainer pulls the plug on npm packages colors and faker, now what?',
         'https://news.ycombinator.com/item?id=1',
+      ),
+    ).toBe(true);
+  });
+
+  it('flags reused short hooks', () => {
+    expect(
+      similarHook(
+        'Vitest vs Next.js: the config showdown',
+        'Vitest vs Next.js config showdown',
       ),
     ).toBe(true);
   });
