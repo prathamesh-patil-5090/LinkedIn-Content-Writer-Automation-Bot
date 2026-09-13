@@ -460,7 +460,8 @@ export default function TodayPage() {
                   {winnerTitle}
                 </p>
               ) : null}
-              {data.draft?.hook ? (
+              {/* Hook is already the first line of post_text — don't render it twice. */}
+              {!data.draft?.postText && data.draft?.hook ? (
                 <p className="hook">{data.draft.hook}</p>
               ) : null}
               {data.draft?.imageUrl ? (

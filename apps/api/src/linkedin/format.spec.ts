@@ -33,6 +33,19 @@ describe('linkedin unicode format', () => {
     expect(foldStyledLetters(out).toLowerCase()).toContain('1.3.x');
   });
 
+  it('removes a duplicated opening title', () => {
+    const { dedupeLeadingTitle, formatLinkedInPost, foldForCompare } =
+      require('./format') as typeof import('./format');
+    const raw =
+      'Vercel & Netlify Are Great. But What About Deploying Background Workers?\n\nVercel & Netlify Are Great. But What About Deploying Background Workers?\n\nI tried Railway for a worker.';
+    const deduped = dedupeLeadingTitle(raw);
+    expect(deduped.split('\n').filter((l: string) => l.trim()).length).toBe(2);
+    const out = formatLinkedInPost(raw + '\n\n#WebDev');
+    const lines = out.split('\n').filter((l: string) => l.trim() && !l.startsWith('#'));
+    expect(foldForCompare(lines[0])).toContain('vercel');
+    expect(foldForCompare(lines[1])).not.toBe(foldForCompare(lines[0]));
+  });
+
   it('does not emit null bytes when a URL is on the hook line', () => {
     const out = formatLinkedInPost('See https://react.dev now.\n\n#react');
     expect(out.includes('\u0000')).toBe(false);
