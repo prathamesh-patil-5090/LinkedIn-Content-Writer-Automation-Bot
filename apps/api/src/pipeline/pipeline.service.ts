@@ -4,6 +4,7 @@ import {
   fallbackBuckets,
   normalizeBucket,
   storyBucketsFor,
+  type ContentPillar,
   type ContentType,
 } from '@ldp/shared';
 import { PrismaService } from '../prisma/prisma.module';
@@ -22,6 +23,15 @@ import {
   POSTS_PER_DAY,
   startOfIstDay,
 } from '../scheduler/cron-window';
+import { ContentConfigService } from '../content/content-config.service';
+import { SourceEventsService } from '../content/source-events.service';
+import { OpportunityScorerService } from '../content/opportunity-scorer.service';
+import { PillarService } from '../content/pillar.service';
+import { AngleHookService } from '../content/angle-hook.service';
+import { QualityGateService } from '../content/quality-gate.service';
+import { WritingProfileService } from '../content/writing-profile.service';
+import { FeedbackService } from '../content/feedback.service';
+import { GithubIngestService } from '../content/github-ingest.service';
 
 class PipelineCancelledError extends Error {
   constructor() {
@@ -29,6 +39,20 @@ class PipelineCancelledError extends Error {
     this.name = 'PipelineCancelledError';
   }
 }
+
+type IntelligenceContext = {
+  opportunityId?: string;
+  sourceEventId?: string;
+  pillar: ContentPillar;
+  format?: string;
+  contentScore: number;
+  scoresJson?: unknown;
+  selectedAngle: string;
+  selectedHook: string;
+  anglesJson?: unknown;
+  hooksJson?: unknown;
+  diversityBoosts?: Record<string, number>;
+};
 
 @Injectable()
 export class PipelineService {
@@ -45,6 +69,15 @@ export class PipelineService {
     private readonly telegram: TelegramService,
     private readonly config: ConfigService,
     private readonly linkedin: LinkedInService,
+    private readonly contentConfig: ContentConfigService,
+    private readonly sourceEvents: SourceEventsService,
+    private readonly opportunityScorer: OpportunityScorerService,
+    private readonly pillars: PillarService,
+    private readonly angleHook: AngleHookService,
+    private readonly qualityGate: QualityGateService,
+    private readonly writingProfile: WritingProfileService,
+    private readonly feedback: FeedbackService,
+    private readonly githubIngest: GithubIngestService,
   ) {}
 
   async startRun(
@@ -301,6 +334,14 @@ export class PipelineService {
           prediction_reason:
             selectedStory.prediction_reason || 'Manually selected from candidates',
         };
+        const events = await this.sourceEvents.normalizeStories([
+          {
+            title: winner.title,
+            link: winner.link,
+            summary: winner.why_it_matters,
+            source: 'manual',
+          },
+        ]);
         await this.prisma.run.update({
           where: { id: runId },
           data: {
@@ -310,11 +351,50 @@ export class PipelineService {
           },
         });
         await this.logStep(runId, 'select', winner.title, { winner });
+
+        const intel = await this.buildIntelligence(runId, winner, {
+          sourceEventId: events[0]?.id,
+        });
+
+        await this.setStatus(runId, 'writing');
+        await this.assertNotCancelled(runId);
+        const written = await this.writeWithQualityGate(
+          runId,
+          winner,
+          used,
+          undefined,
+          contentType || normalizeBucket(winner.angle),
+          intel,
+        );
+        await this.persistDraftAndFinalize(
+          runId,
+          winner,
+          written,
+          1,
+          contentType || normalizeBucket(winner.angle),
+          intel,
+        );
       } else {
         await this.setStatus(runId, 'collecting');
         await this.assertNotCancelled(runId);
+        if (this.githubIngest.configured()) {
+          try {
+            const gh = await this.githubIngest.ingestRecent(8);
+            await this.logStep(runId, 'github_ingest', `${gh.ingested} commits`, gh);
+          } catch (err) {
+            this.log.warn(
+              `GitHub ingest skipped: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
         const { stories, collectedAt } = await this.news.collect(40);
         await this.assertNotCancelled(runId);
+        const eventRows = await this.sourceEvents.normalizeStories(stories);
+        const eventByLink = new Map(
+          eventRows.map((e) => [e.story.link, e.id] as const),
+        );
         const fresh = used.unusedStories(stories);
         await this.prisma.run.update({
           where: { id: runId },
@@ -326,6 +406,7 @@ export class PipelineService {
         await this.logStep(runId, 'collect', `${fresh.length} unused of ${stories.length}`, {
           count: fresh.length,
           collected: stories.length,
+          sourceEvents: eventRows.length,
         });
 
         if (fresh.length === 0) {
@@ -366,67 +447,67 @@ export class PipelineService {
         );
         await this.assertNotCancelled(runId);
         winner = this.pickUniqueWinner(rank.data, unusedTop, used, contentType);
+
+        const scored = await this.selectScoredWinner(
+          runId,
+          winner,
+          unusedTop,
+          used,
+          contentType,
+          eventByLink,
+        );
+        winner = scored.winner;
+        const intel = scored.intel;
+
         await this.prisma.run.update({
           where: { id: runId },
           data: {
-            winnerJson: { ...rank.data, winner, contentType: contentType || winner.angle },
+            winnerJson: {
+              ...rank.data,
+              winner,
+              contentType: contentType || winner.angle,
+              intelligence: {
+                pillar: intel.pillar,
+                contentScore: intel.contentScore,
+                selectedAngle: intel.selectedAngle,
+                selectedHook: intel.selectedHook,
+                opportunityId: intel.opportunityId,
+              },
+            },
           },
         });
         await this.logStep(
           runId,
           'rank',
           `${contentType || winner.angle}: ${winner.title}`,
-          { ...rank.data, winner, contentType },
+          {
+            ...rank.data,
+            winner,
+            contentType,
+            intelligence: intel,
+          },
           rank.latencyMs,
         );
-      }
 
-      await this.setStatus(runId, 'writing');
-      await this.assertNotCancelled(runId);
-      const { voice, drafts } = await this.writeUniquePost(
-        runId,
-        winner,
-        used,
-        undefined,
-        contentType || normalizeBucket(winner.angle),
-      );
-      await this.assertNotCancelled(runId);
-
-      const draft = await this.prisma.draft.create({
-        data: {
+        await this.setStatus(runId, 'writing');
+        await this.assertNotCancelled(runId);
+        const written = await this.writeWithQualityGate(
           runId,
-          version: 1,
-          chosenStyle: voice.data.chosen_style,
-          hook: voice.data.hook,
-          postText: voice.data.post_text,
-          imagePrompt: voice.data.image_prompt,
-          imageUrl: null,
-          hashtags: voice.data.hashtags,
-          sourceTitle: voice.data.source_title || winner.title,
-          sourceLink: voice.data.source_link || winner.link,
-          threeDraftsJson: drafts.data,
-          status: 'pending',
-        },
-      });
-
-      await this.attachTweet(runId, draft.id, {
-        postText: voice.data.post_text,
-        hook: voice.data.hook,
-        sourceTitle: voice.data.source_title || winner.title,
-        sourceLink: voice.data.source_link || winner.link,
-      });
-
-      await this.setStatus(runId, 'pending_approval');
-
-      await this.attachImage(runId, draft.id, {
-        prompt: voice.data.image_prompt,
-        hook: voice.data.hook,
-        source: voice.data.source_title || winner.title,
-        postText: voice.data.post_text,
-        version: 1,
-        category: contentType || normalizeBucket(winner.angle),
-      });
-      await this.finishRun(runId);
+          winner,
+          used,
+          undefined,
+          contentType || normalizeBucket(winner.angle),
+          intel,
+        );
+        await this.persistDraftAndFinalize(
+          runId,
+          winner,
+          written,
+          1,
+          contentType || normalizeBucket(winner.angle),
+          intel,
+        );
+      }
     } catch (err) {
       if (err instanceof PipelineCancelledError) {
         this.log.log(`Run ${runId} cancelled`);
@@ -437,10 +518,19 @@ export class PipelineService {
         where: { id: runId },
         select: { status: true },
       });
-      if (current?.status !== 'failed') {
+      if (
+        current?.status !== 'failed' &&
+        current?.status !== 'rejected' &&
+        current?.status !== 'published'
+      ) {
+        const rejected =
+          /opportunity rejected|quality gate rejected/i.test(message);
         await this.prisma.run.update({
           where: { id: runId },
-          data: { status: 'failed', errorMessage: message },
+          data: {
+            status: rejected ? 'rejected' : 'failed',
+            errorMessage: message,
+          },
         });
       }
     } finally {
@@ -473,51 +563,23 @@ export class PipelineService {
         (await this.prisma.draft.count({ where: { runId } })) + 1;
 
       const used = await loadUsedIndex(this.prisma);
-      const { voice, drafts } = await this.writeUniquePost(
+      const intel = await this.buildIntelligence(runId, winner);
+      const written = await this.writeWithQualityGate(
         runId,
         winner,
         used,
         feedback,
         winnerJson.contentType || normalizeBucket(winner.angle),
+        intel,
       );
-      await this.assertNotCancelled(runId);
-
-      const draft = await this.prisma.draft.create({
-        data: {
-          runId,
-          version,
-          chosenStyle: voice.data.chosen_style,
-          hook: voice.data.hook,
-          postText: voice.data.post_text,
-          imagePrompt: voice.data.image_prompt,
-          imageUrl: null,
-          hashtags: voice.data.hashtags,
-          sourceTitle: voice.data.source_title || winner.title,
-          sourceLink: voice.data.source_link || winner.link,
-          threeDraftsJson: drafts.data,
-          status: 'pending',
-          feedback: feedback || null,
-        },
-      });
-
-      await this.attachTweet(runId, draft.id, {
-        postText: voice.data.post_text,
-        hook: voice.data.hook,
-        sourceTitle: voice.data.source_title || winner.title,
-        sourceLink: voice.data.source_link || winner.link,
-      });
-
-      await this.setStatus(runId, 'pending_approval');
-      await this.notifyDraftReady(runId);
-
-      await this.attachImage(runId, draft.id, {
-        prompt: voice.data.image_prompt,
-        hook: voice.data.hook,
-        source: voice.data.source_title || winner.title,
-        postText: voice.data.post_text,
+      await this.persistDraftAndFinalize(
+        runId,
+        winner,
+        written,
         version,
-        category: winnerJson.contentType || normalizeBucket(winner.angle),
-      });
+        winnerJson.contentType || normalizeBucket(winner.angle),
+        intel,
+      );
     } catch (err) {
       if (err instanceof PipelineCancelledError) {
         this.log.log(`Regen ${runId} cancelled`);
@@ -528,10 +590,19 @@ export class PipelineService {
         where: { id: runId },
         select: { status: true },
       });
-      if (current?.status !== 'failed') {
+      if (
+        current?.status !== 'failed' &&
+        current?.status !== 'rejected' &&
+        current?.status !== 'published'
+      ) {
+        const rejected =
+          /opportunity rejected|quality gate rejected/i.test(message);
         await this.prisma.run.update({
           where: { id: runId },
-          data: { status: 'failed', errorMessage: message },
+          data: {
+            status: rejected ? 'rejected' : 'failed',
+            errorMessage: message,
+          },
         });
       }
     } finally {
@@ -600,7 +671,7 @@ export class PipelineService {
       if (current?.status === 'imaging') {
         await this.prisma.run.update({
           where: { id: runId },
-          data: { status: 'pending_approval' },
+          data: { status: 'auto_approved' },
         });
       }
     }
@@ -720,6 +791,7 @@ export class PipelineService {
     used: UsedIndex,
     feedback?: string,
     contentType?: ContentType,
+    intel?: IntelligenceContext,
   ) {
     const rawWhy = winner.why_it_matters || '';
     winner = {
@@ -727,7 +799,14 @@ export class PipelineService {
       link: articleUrlFromHn(rawWhy) || winner.link,
       why_it_matters: isHnMetadata(rawWhy)
         ? cleanStoryBlurb(winner.title, '')
-        : cleanStoryBlurb(winner.title, rawWhy),
+        : cleanStoryBlurb(
+            winner.title,
+            rawWhy
+              .replace(/^\s*Angle:\s*.+$/gim, '')
+              .replace(/^\s*Preferred hook:\s*.+$/gim, '')
+              .trim(),
+          ),
+      angle: intel?.selectedAngle || winner.angle,
     };
     const drafts = await this.agents.writeDrafts(
       winner,
@@ -737,11 +816,33 @@ export class PipelineService {
     await this.logStep(runId, 'content', '2 essay drafts', drafts.data, drafts.latencyMs);
 
     const samples = await this.activeSamples();
+    let profileNote = '';
+    try {
+      const profile = await this.writingProfile.getActive();
+      profileNote = this.writingProfile.formatForPrompt(profile);
+    } catch {
+      /* optional */
+    }
     const voiceOpts = {
       drafts: drafts.data,
       winner,
       voiceSamples: samples,
-      feedback,
+      feedback: [
+        feedback,
+        intel
+          ? [
+              `Writing brief (do NOT paste these labels into the post):`,
+              `- Angle to follow: ${intel.selectedAngle}`,
+              `- Preferred hook energy (rewrite in your words, do not paste verbatim): ${intel.selectedHook}`,
+              `- Pillar: ${intel.pillar}`,
+              `- Format: ${intel.format || 'engineering_story'}`,
+            ].join('\n')
+          : null,
+        profileNote || null,
+        'Write a LONG clear post: hook + 3 or 4 short paragraphs + question. Explain like a sharp coworker, not a press release. Never paste "Angle:" or "Preferred hook:" into the body.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
       avoidPosts: used.posts.slice(0, 8),
     };
     let voice = await this.agents.applyVoice(voiceOpts);
@@ -751,7 +852,7 @@ export class PipelineService {
       voice = await this.agents.applyVoice({
         ...voiceOpts,
         feedback: [
-          feedback,
+          voiceOpts.feedback,
           'Rewrite from scratch. New hook, new examples, new closing question. Do not echo any previous post or title.',
         ]
           .filter(Boolean)
@@ -804,44 +905,474 @@ export class PipelineService {
     return { voice, drafts };
   }
 
-  private async finishRun(runId: string) {
-    const run = await this.prisma.run.findUnique({
-      where: { id: runId },
-      select: { triggeredBy: true, status: true },
+  private async buildIntelligence(
+    runId: string,
+    winner: {
+      title: string;
+      link: string;
+      why_it_matters: string;
+      angle: string;
+    },
+    opts?: { sourceEventId?: string },
+  ): Promise<IntelligenceContext> {
+    const scored = await this.opportunityScorer.scoreAndPersist({
+      runId,
+      sourceEventId: opts?.sourceEventId,
+      title: winner.title,
+      link: winner.link,
+      why: winner.why_it_matters,
+      angle: winner.angle,
     });
-    if (run?.triggeredBy === 'cron') {
-      await this.maybeAutoPublish(runId);
-      return;
+    if (scored.rejected) {
+      await this.logStep(runId, 'opportunity_reject', winner.title, {
+        contentScore: scored.contentScore,
+        reasons: scored.reasons,
+      });
+      throw new Error(
+        `Opportunity rejected: ${scored.reasons.join('; ') || 'low content score'}`,
+      );
     }
-    await this.notifyDraftReady(runId);
+
+    const boosts = await this.pillars.diversityBoosts(20);
+    const feedbackHints = await this.feedback.cautiousPillarHints();
+    for (const [p, b] of Object.entries(feedbackHints.boosts)) {
+      boosts[p as ContentPillar] = (boosts[p as ContentPillar] || 0) + (b || 0);
+    }
+
+    let pillar = scored.pillar;
+    // Soft preference: if boost for another pillar is high, keep scored pillar
+    // but note diversity in angle generation.
+    const diversityNote = `Recent pillar boosts: ${JSON.stringify(boosts)}`;
+
+    const angles = await this.angleHook.generateAngles({
+      title: winner.title,
+      why: winner.why_it_matters,
+      pillar,
+      formatHint: scored.format,
+      diversityNote,
+    });
+    const used = await loadUsedIndex(this.prisma);
+    const hooks = await this.angleHook.generateHooks({
+      title: winner.title,
+      angle: angles.selected.angle,
+      pillar,
+      avoidHooks: used.hooks.slice(0, 20),
+    });
+
+    if (scored.opportunityId) {
+      await this.prisma.contentOpportunity.update({
+        where: { id: scored.opportunityId },
+        data: {
+          status: 'selected',
+          pillar,
+          format: angles.selected.format || scored.format,
+          anglesJson: angles.angles,
+          hooksJson: hooks.hooks,
+          selectedAngle: angles.selected.angle,
+          selectedHook: hooks.selected.text,
+        },
+      });
+    }
+
+    await this.logStep(runId, 'intelligence', hooks.selected.text, {
+      contentScore: scored.contentScore,
+      pillar,
+      angle: angles.selected.angle,
+      hook: hooks.selected.text,
+      boosts,
+    });
+
+    return {
+      opportunityId: scored.opportunityId,
+      sourceEventId: opts?.sourceEventId,
+      pillar,
+      format: angles.selected.format || scored.format,
+      contentScore: scored.contentScore,
+      scoresJson: scored.scores,
+      selectedAngle: angles.selected.angle,
+      selectedHook: hooks.selected.text,
+      anglesJson: angles.angles,
+      hooksJson: hooks.hooks,
+      diversityBoosts: boosts,
+    };
   }
 
-  private async maybeAutoPublish(runId: string) {
-    if (this.config.get('CRON_AUTO_PUBLISH') === 'false') {
-      await this.notifyDraftReady(runId);
-      return;
+  private async selectScoredWinner(
+    runId: string,
+    primary: {
+      title: string;
+      link: string;
+      why_it_matters: string;
+      angle: string;
+      trend_score?: number;
+      prediction_reason?: string;
+    },
+    topStories: Array<{
+      title: string;
+      link: string;
+      why_it_matters: string;
+      angle: string;
+      trend_score: number;
+    }>,
+    used: UsedIndex,
+    contentType: ContentType | undefined,
+    eventByLink: Map<string, string>,
+  ): Promise<{
+    winner: typeof primary;
+    intel: IntelligenceContext;
+  }> {
+    const ordered = [
+      primary,
+      ...topStories.filter(
+        (s) => s.link !== primary.link && s.title !== primary.title,
+      ),
+    ];
+    const errors: string[] = [];
+    for (const candidate of ordered.slice(0, 6)) {
+      if (used.matchesStory(candidate.title, candidate.link)) continue;
+      try {
+        const intel = await this.buildIntelligence(runId, candidate, {
+          sourceEventId: eventByLink.get(candidate.link),
+        });
+        return {
+          winner: {
+            title: candidate.title,
+            link: candidate.link,
+            why_it_matters: candidate.why_it_matters,
+            angle: candidate.angle,
+            trend_score:
+              'trend_score' in candidate
+                ? candidate.trend_score
+                : primary.trend_score,
+            prediction_reason:
+              'prediction_reason' in candidate &&
+              (candidate as { prediction_reason?: string }).prediction_reason
+                ? String(
+                    (candidate as { prediction_reason?: string })
+                      .prediction_reason,
+                  )
+                : contentType
+                  ? `Scored unused ${contentType} story`
+                  : 'Scored unused story',
+          },
+          intel,
+        };
+      } catch (err) {
+        errors.push(
+          `${candidate.title}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
+    throw new Error(
+      `All candidates failed opportunity gate: ${errors.slice(0, 3).join(' | ')}`,
+    );
+  }
+
+  private async writeWithQualityGate(
+    runId: string,
+    winner: {
+      title: string;
+      link: string;
+      why_it_matters: string;
+      angle: string;
+      trend_score?: number;
+      prediction_reason?: string;
+    },
+    used: UsedIndex,
+    feedback: string | undefined,
+    contentType: ContentType | undefined,
+    intel: IntelligenceContext,
+  ) {
+    let regen = 0;
+    let lastFeedback = feedback;
+    const max = this.contentConfig.maxRegenerationAttempts();
+
+    while (true) {
+      await this.assertNotCancelled(runId);
+      const { voice, drafts } = await this.writeUniquePost(
+        runId,
+        winner,
+        used,
+        lastFeedback,
+        contentType,
+        intel,
+      );
+
+      const qc = await this.qualityGate.evaluate({
+        postText: voice.data.post_text,
+        hook: voice.data.hook,
+        sourceTitle: voice.data.source_title || winner.title,
+        sourceLink: voice.data.source_link || winner.link,
+        pillar: intel.pillar,
+        used,
+        regenerationCount: regen,
+      });
+
+      await this.logStep(runId, 'quality_gate', qc.decision, {
+        ...qc,
+        regenerationCount: regen,
+      });
+
+      if (qc.decision === 'approved') {
+        return {
+          voice,
+          drafts,
+          qc,
+          regenerationCount: regen,
+        };
+      }
+
+      if (qc.decision === 'rejected' || regen >= max) {
+        await this.prisma.run.update({
+          where: { id: runId },
+          data: {
+            status: 'rejected',
+            errorMessage: (qc.reasons || []).join('; ') || 'QC rejected',
+          },
+        });
+        throw new Error(
+          `Quality gate rejected after ${regen} regen(s): ${(qc.reasons || []).join('; ')}`,
+        );
+      }
+
+      regen += 1;
+      lastFeedback = [
+        lastFeedback,
+        qc.feedback,
+        `QC failed: ${(qc.reasons || []).join('; ')}. Rewrite for authenticity and specificity.`,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      await this.setStatus(runId, 'regenerating');
+    }
+  }
+
+  private async persistDraftAndFinalize(
+    runId: string,
+    winner: {
+      title: string;
+      link: string;
+    },
+    written: {
+      voice: {
+        data: {
+          chosen_style: string;
+          hook: string;
+          post_text: string;
+          image_prompt: string;
+          hashtags: string[];
+          source_title: string;
+          source_link: string;
+        };
+      };
+      drafts: { data: unknown };
+      qc: {
+        decision: string;
+        reasons: string[];
+        qualityScore?: number;
+        authenticityScore?: number;
+        aiGenericnessScore?: number;
+        repetitionScore?: number;
+        scores?: unknown;
+        feedback?: string;
+      };
+      regenerationCount: number;
+    },
+    version: number,
+    contentType: ContentType | string | undefined,
+    intel: IntelligenceContext,
+  ) {
+    const { voice, drafts, qc, regenerationCount } = written;
+    const draft = await this.prisma.draft.create({
+      data: {
+        runId,
+        version,
+        chosenStyle: voice.data.chosen_style,
+        hook: voice.data.hook,
+        postText: voice.data.post_text,
+        imagePrompt: voice.data.image_prompt,
+        imageUrl: null,
+        hashtags: voice.data.hashtags,
+        sourceTitle: voice.data.source_title || winner.title,
+        sourceLink: voice.data.source_link || winner.link,
+        threeDraftsJson: drafts.data as object,
+        status: 'auto_approved',
+      },
+    });
+
+    await this.prisma.contentDraftMeta.create({
+      data: {
+        draftId: draft.id,
+        runId,
+        pillar: intel.pillar,
+        format: intel.format,
+        contentScore: intel.contentScore,
+        qualityScore: qc.qualityScore,
+        authenticityScore: qc.authenticityScore,
+        aiGenericnessScore: qc.aiGenericnessScore,
+        repetitionScore: qc.repetitionScore,
+        diversityScore: intel.diversityBoosts
+          ? Object.values(intel.diversityBoosts).reduce((a, b) => a + b, 0)
+          : undefined,
+        scoresJson: {
+          opportunity: intel.scoresJson as object,
+          quality: qc.scores as object,
+        },
+        decision: 'approved',
+        decisionReasons: qc.reasons || [],
+        decisionJson: {
+          decision: qc.decision,
+          reasons: qc.reasons,
+          qualityScore: qc.qualityScore,
+          authenticityScore: qc.authenticityScore,
+          aiGenericnessScore: qc.aiGenericnessScore,
+          repetitionScore: qc.repetitionScore,
+          contentScore: intel.contentScore,
+          pillar: intel.pillar,
+          selectedAngle: intel.selectedAngle,
+          selectedHook: intel.selectedHook,
+        },
+        selectedAngle: intel.selectedAngle,
+        selectedHook: intel.selectedHook,
+        promptVersions: {
+          scorer: 'event-scorer-v1',
+          angle: 'angle-v1',
+          hook: 'hook-v1',
+          draft: 'draft-v1',
+          qc: 'qc-v1',
+        } as object,
+        regenerationCount,
+      },
+    });
+
+    await this.attachTweet(runId, draft.id, {
+      postText: voice.data.post_text,
+      hook: voice.data.hook,
+      sourceTitle: voice.data.source_title || winner.title,
+      sourceLink: voice.data.source_link || winner.link,
+    });
+
+    await this.setStatus(runId, 'auto_approved');
+
+    await this.attachImage(runId, draft.id, {
+      prompt: voice.data.image_prompt,
+      hook: voice.data.hook,
+      source: voice.data.source_title || winner.title,
+      postText: voice.data.post_text,
+      version,
+      category: contentType,
+    });
+
+    await this.finalizeAutonomous(runId);
+  }
+
+  private async finishRun(runId: string) {
+    await this.finalizeAutonomous(runId);
+  }
+
+  /** Cron + autonomous manual: QC-passed drafts publish without human Approve. */
+  private async finalizeAutonomous(runId: string) {
     const run = await this.prisma.run.findUnique({
       where: { id: runId },
       select: { triggeredBy: true, status: true, winnerJson: true },
     });
-    if (run?.triggeredBy !== 'cron' || run.status !== 'pending_approval') {
+    if (!run) return;
+
+    const autonomous =
+      run.triggeredBy === 'cron'
+        ? this.config.get('CRON_AUTO_PUBLISH') !== 'false'
+        : this.contentConfig.autonomousPublish();
+
+    if (!autonomous) {
+      await this.prisma.run.update({
+        where: { id: runId },
+        data: { status: 'pending_approval' },
+      });
+      await this.prisma.draft.updateMany({
+        where: { runId, status: 'auto_approved' },
+        data: { status: 'pending' },
+      });
+      await this.notifyDraftReady(runId);
       return;
     }
+
+    if (
+      run.status !== 'pending_approval' &&
+      run.status !== 'auto_approved' &&
+      run.status !== 'imaging'
+    ) {
+      // Image step may have reset to pending_approval — refresh
+      const fresh = await this.prisma.run.findUnique({
+        where: { id: runId },
+        select: { status: true },
+      });
+      if (
+        fresh?.status !== 'pending_approval' &&
+        fresh?.status !== 'auto_approved'
+      ) {
+        return;
+      }
+    }
+
     if (!this.linkedin.configured()) {
       await this.prisma.run.update({
         where: { id: runId },
         data: {
           status: 'failed',
-          errorMessage: 'Cron auto-publish needs LinkedIn connected',
+          errorMessage: 'Autonomous publish needs LinkedIn connected',
         },
       });
       return;
     }
+
+    // publishPendingRun expects a pending draft
+    await this.prisma.draft.updateMany({
+      where: { runId, status: { in: ['auto_approved', 'pending', 'approved'] } },
+      data: { status: 'pending' },
+    });
+    await this.prisma.run.update({
+      where: { id: runId },
+      data: { status: 'pending_approval' },
+    });
+
     try {
       const result = await this.linkedin.publishPendingRun(runId);
       await this.logStep(runId, 'publish', result.urn || 'published', result);
-      this.log.log(`Auto-published run ${runId}`);
+
+      const draft = await this.prisma.draft.findFirst({
+        where: { runId },
+        orderBy: { version: 'desc' },
+      });
+      const meta = draft
+        ? await this.prisma.contentDraftMeta.findUnique({
+            where: { draftId: draft.id },
+          })
+        : null;
+      if (meta) {
+        await this.prisma.contentDraftMeta.update({
+          where: { id: meta.id },
+          data: {
+            decision: 'published',
+            decisionReasons: [
+              ...(meta.decisionReasons || []),
+              'auto-published',
+            ],
+          },
+        });
+      }
+      await this.feedback.recordPublishStub({
+        runId,
+        draftId: draft?.id,
+        linkedinPostUrn: result.urn,
+        pillar: meta?.pillar,
+        format: meta?.format,
+        hook: draft?.hook,
+        contentScore: meta?.contentScore,
+        qualityScore: meta?.qualityScore,
+        publishedAt: new Date(),
+      });
+
+      this.log.log(`Autonomous publish OK for run ${runId}`);
       const w = run.winnerJson as {
         winner?: { title?: string; link?: string };
       } | null;
@@ -850,8 +1381,12 @@ export class PipelineService {
       const article = w?.winner?.link?.trim();
       await this.telegram.ping(
         [
-          'Published to LinkedIn (cron).',
+          `Published to LinkedIn (${run.triggeredBy}, autonomous).`,
           title,
+          meta?.pillar ? `Pillar: ${meta.pillar}` : null,
+          meta?.qualityScore != null
+            ? `Quality: ${meta.qualityScore}`
+            : null,
           article ? `Article: ${article}` : null,
           appUrl,
         ]
@@ -860,9 +1395,14 @@ export class PipelineService {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`Auto-publish failed for ${runId}: ${msg}`);
-      await this.telegram.ping(`Cron publish failed: ${msg}`);
+      this.log.warn(`Autonomous publish failed for ${runId}: ${msg}`);
+      await this.telegram.ping(`Autonomous publish failed: ${msg}`);
     }
+  }
+
+  /** @deprecated use finalizeAutonomous */
+  private async maybeAutoPublish(runId: string) {
+    await this.finalizeAutonomous(runId);
   }
 
   private async activeSamples() {

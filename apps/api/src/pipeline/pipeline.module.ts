@@ -5,6 +5,7 @@ import { AgentsModule } from '../agents/agents.module';
 import { MediaModule } from '../media/media.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { LinkedInModule } from '../linkedin/linkedin.module';
+import { ContentModule } from '../content/content.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { LinkedInModule } from '../linkedin/linkedin.module';
     MediaModule,
     NotificationsModule,
     LinkedInModule,
+    ContentModule,
   ],
   providers: [PipelineService],
   exports: [PipelineService],

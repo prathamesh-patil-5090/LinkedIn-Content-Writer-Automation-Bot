@@ -13,6 +13,7 @@ import { PipelineModule } from './pipeline/pipeline.module';
 import { LinkedInModule } from './linkedin/linkedin.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { NewsModule } from './news/news.module';
+import { ContentModule } from './content/content.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { NewsModule } from './news/news.module';
     MediaModule,
     NotificationsModule,
     NewsModule,
+    ContentModule,
     PipelineModule,
     LinkedInModule,
     RunsModule,

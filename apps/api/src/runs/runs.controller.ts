@@ -111,13 +111,30 @@ export class RunsController {
     });
 
     if (!run) {
-      return { run: null, draft: null };
+      return { run: null, draft: null, meta: null, contentConfig: null };
     }
 
     const draft =
-      run.drafts.find((d) => d.status === 'pending') ?? run.drafts[0] ?? null;
+      run.drafts.find((d) =>
+        ['pending', 'auto_approved', 'approved'].includes(d.status),
+      ) ??
+      run.drafts[0] ??
+      null;
 
-    return { run, draft };
+    const meta = draft
+      ? await this.prisma.contentDraftMeta.findUnique({
+          where: { draftId: draft.id },
+        })
+      : null;
+
+    return {
+      run,
+      draft,
+      meta,
+      contentConfig: {
+        autonomousPublish: process.env.AUTONOMOUS_PUBLISH !== 'false',
+      },
+    };
   }
 
   @Get()
@@ -296,7 +313,7 @@ export class RunsController {
     if (!run) throw new NotFoundException('Run not found');
 
     await this.prisma.draft.updateMany({
-      where: { runId: id, status: 'pending' },
+      where: { runId: id, status: { in: ['pending', 'auto_approved', 'approved'] } },
       data: { status: 'rejected', feedback: 'skipped' },
     });
     await this.prisma.run.update({
