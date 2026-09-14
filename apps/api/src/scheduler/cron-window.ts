@@ -27,8 +27,9 @@ export function cronWindowStatus(now = new Date()) {
 }
 
 export function shouldRunCronSlot(now = new Date()) {
-  const { inWindow } = cronWindowStatus(now);
-  return inWindow;
+  const { inWindow, istMinute } = cronWindowStatus(now);
+  // Nest fires at :00; allow a few minutes so a slow boot / HTTP tick still counts.
+  return inWindow && istMinute <= 5;
 }
 
 export function startOfIstDay(now = new Date()) {
