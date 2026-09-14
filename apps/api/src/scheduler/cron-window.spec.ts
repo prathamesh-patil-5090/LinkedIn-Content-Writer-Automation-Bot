@@ -1,9 +1,26 @@
 import {
   contentTypeForHour,
   cronWindowStatus,
+  shouldRunCronSlot,
   startOfIstDay,
+  IST_CRON_HOURS,
+  POSTS_PER_DAY,
 } from './cron-window';
 import { normalizeBucket } from '@ldp/shared';
+
+describe('daily cron slots', () => {
+  it('schedules 6 IST hours', () => {
+    expect(POSTS_PER_DAY).toBe(6);
+    expect(IST_CRON_HOURS).toEqual([7, 10, 13, 16, 19, 22]);
+  });
+
+  it('allows ticks only in the first minutes of a slot hour', () => {
+    expect(shouldRunCronSlot(new Date('2026-09-14T07:00:00+05:30'))).toBe(true);
+    expect(shouldRunCronSlot(new Date('2026-09-14T07:05:00+05:30'))).toBe(true);
+    expect(shouldRunCronSlot(new Date('2026-09-14T07:06:00+05:30'))).toBe(false);
+    expect(shouldRunCronSlot(new Date('2026-09-14T08:00:00+05:30'))).toBe(false);
+  });
+});
 
 describe('contentTypeForHour', () => {
   it('maps the IST slots to a mixed day', () => {
