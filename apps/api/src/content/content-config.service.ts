@@ -10,9 +10,9 @@ import {
 export class ContentConfigService {
   constructor(private readonly config: ConfigService) {}
 
-  /** Auto-publish after QC for cron and manual (default on). */
+  /** Manual Generate never auto-publishes; only cron uses CRON_AUTO_PUBLISH. */
   autonomousPublish(): boolean {
-    return this.config.get('AUTONOMOUS_PUBLISH') !== 'false';
+    return false;
   }
 
   contentScoreThreshold(): number {

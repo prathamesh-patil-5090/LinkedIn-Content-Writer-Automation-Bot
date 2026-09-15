@@ -17,6 +17,7 @@ import { LinkedInService } from '../linkedin/linkedin.service';
 import { loadUsedIndex, UsedIndex } from './uniqueness';
 import { polishDraft } from '../linkedin/polish';
 import { articleUrlFromHn, cleanStoryBlurb, isHnMetadata } from '../news/hn-item';
+import { fetchArticleExcerpt } from '../news/article-context';
 import {
   contentTypeForHour,
   cronWindowStatus,
@@ -666,12 +667,17 @@ export class PipelineService {
     } finally {
       const current = await this.prisma.run.findUnique({
         where: { id: runId },
-        select: { status: true },
+        select: { status: true, triggeredBy: true },
       });
       if (current?.status === 'imaging') {
         await this.prisma.run.update({
           where: { id: runId },
-          data: { status: 'auto_approved' },
+          data: {
+            status:
+              current.triggeredBy === 'cron'
+                ? 'auto_approved'
+                : 'pending_approval',
+          },
         });
       }
     }
@@ -808,10 +814,20 @@ export class PipelineService {
           ),
       angle: intel?.selectedAngle || winner.angle,
     };
+    const articleExcerpt = await fetchArticleExcerpt(winner.link);
+    if (articleExcerpt) {
+      await this.logStep(
+        runId,
+        'article_context',
+        `${articleExcerpt.length} chars`,
+        { link: winner.link, excerptPreview: articleExcerpt.slice(0, 240) },
+      );
+    }
     const drafts = await this.agents.writeDrafts(
       winner,
       { hooks: used.hooks },
       contentType,
+      articleExcerpt,
     );
     await this.logStep(runId, 'content', '2 essay drafts', drafts.data, drafts.latencyMs);
 
@@ -827,6 +843,7 @@ export class PipelineService {
       drafts: drafts.data,
       winner,
       voiceSamples: samples,
+      articleExcerpt,
       feedback: [
         feedback,
         intel
@@ -839,7 +856,7 @@ export class PipelineService {
             ].join('\n')
           : null,
         profileNote || null,
-        'Write a LONG clear post: hook + 3 or 4 short paragraphs + question. Explain like a sharp coworker, not a press release. Never paste "Angle:" or "Preferred hook:" into the body.',
+        'Write a LONG original essay (~500-700 words): specific facts from the article, your builder interpretation, one concrete action. Include Primary source URL. Never use generic boilerplate.',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -886,6 +903,8 @@ export class PipelineService {
       hashtags: voice.data.hashtags,
       category: contentType || normalizeBucket(winner.angle),
       avoidHashtags: used.recentHashtags(14),
+      sourceLink: voice.data.source_link || winner.link,
+      sourceTitle: voice.data.source_title || winner.title,
     });
     voice = {
       ...voice,
@@ -1182,6 +1201,14 @@ export class PipelineService {
     contentType: ContentType | string | undefined,
     intel: IntelligenceContext,
   ) {
+    const runRow = await this.prisma.run.findUnique({
+      where: { id: runId },
+      select: { triggeredBy: true },
+    });
+    const isCron = runRow?.triggeredBy === 'cron';
+    const draftStatus = isCron ? 'auto_approved' : 'pending';
+    const runStatus = isCron ? 'auto_approved' : 'pending_approval';
+
     const { voice, drafts, qc, regenerationCount } = written;
     const draft = await this.prisma.draft.create({
       data: {
@@ -1196,7 +1223,7 @@ export class PipelineService {
         sourceTitle: voice.data.source_title || winner.title,
         sourceLink: voice.data.source_link || winner.link,
         threeDraftsJson: drafts.data as object,
-        status: 'auto_approved',
+        status: draftStatus,
       },
     });
 
@@ -1218,7 +1245,7 @@ export class PipelineService {
           opportunity: intel.scoresJson as object,
           quality: qc.scores as object,
         },
-        decision: 'approved',
+        decision: isCron ? 'approved' : 'pending_review',
         decisionReasons: qc.reasons || [],
         decisionJson: {
           decision: qc.decision,
@@ -1231,6 +1258,7 @@ export class PipelineService {
           pillar: intel.pillar,
           selectedAngle: intel.selectedAngle,
           selectedHook: intel.selectedHook,
+          triggeredBy: runRow?.triggeredBy,
         },
         selectedAngle: intel.selectedAngle,
         selectedHook: intel.selectedHook,
@@ -1252,7 +1280,7 @@ export class PipelineService {
       sourceLink: voice.data.source_link || winner.link,
     });
 
-    await this.setStatus(runId, 'auto_approved');
+    await this.setStatus(runId, runStatus);
 
     await this.attachImage(runId, draft.id, {
       prompt: voice.data.image_prompt,
@@ -1263,33 +1291,38 @@ export class PipelineService {
       category: contentType,
     });
 
-    await this.finalizeAutonomous(runId);
+    await this.finalizeRun(runId);
   }
 
   private async finishRun(runId: string) {
-    await this.finalizeAutonomous(runId);
+    await this.finalizeRun(runId);
   }
 
-  /** Cron + autonomous manual: QC-passed drafts publish without human Approve. */
-  private async finalizeAutonomous(runId: string) {
+  /**
+   * Cron (+ CRON_AUTO_PUBLISH): QC-passed drafts auto-publish.
+   * Manual Generate: always wait for Approve / Reject / Regen.
+   */
+  private async finalizeRun(runId: string) {
     const run = await this.prisma.run.findUnique({
       where: { id: runId },
       select: { triggeredBy: true, status: true, winnerJson: true },
     });
     if (!run) return;
 
-    const autonomous =
-      run.triggeredBy === 'cron'
-        ? this.config.get('CRON_AUTO_PUBLISH') !== 'false'
-        : this.contentConfig.autonomousPublish();
+    const cronAuto =
+      run.triggeredBy === 'cron' &&
+      this.config.get('CRON_AUTO_PUBLISH') !== 'false';
 
-    if (!autonomous) {
+    if (!cronAuto) {
       await this.prisma.run.update({
         where: { id: runId },
         data: { status: 'pending_approval' },
       });
       await this.prisma.draft.updateMany({
-        where: { runId, status: 'auto_approved' },
+        where: {
+          runId,
+          status: { in: ['auto_approved', 'pending', 'approved'] },
+        },
         data: { status: 'pending' },
       });
       await this.notifyDraftReady(runId);
@@ -1301,7 +1334,6 @@ export class PipelineService {
       run.status !== 'auto_approved' &&
       run.status !== 'imaging'
     ) {
-      // Image step may have reset to pending_approval — refresh
       const fresh = await this.prisma.run.findUnique({
         where: { id: runId },
         select: { status: true },
@@ -1319,13 +1351,12 @@ export class PipelineService {
         where: { id: runId },
         data: {
           status: 'failed',
-          errorMessage: 'Autonomous publish needs LinkedIn connected',
+          errorMessage: 'Cron auto-publish needs LinkedIn connected',
         },
       });
       return;
     }
 
-    // publishPendingRun expects a pending draft
     await this.prisma.draft.updateMany({
       where: { runId, status: { in: ['auto_approved', 'pending', 'approved'] } },
       data: { status: 'pending' },
@@ -1355,7 +1386,7 @@ export class PipelineService {
             decision: 'published',
             decisionReasons: [
               ...(meta.decisionReasons || []),
-              'auto-published',
+              'cron-auto-published',
             ],
           },
         });
@@ -1372,7 +1403,7 @@ export class PipelineService {
         publishedAt: new Date(),
       });
 
-      this.log.log(`Autonomous publish OK for run ${runId}`);
+      this.log.log(`Cron auto-publish OK for run ${runId}`);
       const w = run.winnerJson as {
         winner?: { title?: string; link?: string };
       } | null;
@@ -1381,12 +1412,10 @@ export class PipelineService {
       const article = w?.winner?.link?.trim();
       await this.telegram.ping(
         [
-          `Published to LinkedIn (${run.triggeredBy}, autonomous).`,
+          'Published to LinkedIn (cron).',
           title,
           meta?.pillar ? `Pillar: ${meta.pillar}` : null,
-          meta?.qualityScore != null
-            ? `Quality: ${meta.qualityScore}`
-            : null,
+          meta?.qualityScore != null ? `Quality: ${meta.qualityScore}` : null,
           article ? `Article: ${article}` : null,
           appUrl,
         ]
@@ -1395,14 +1424,19 @@ export class PipelineService {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`Autonomous publish failed for ${runId}: ${msg}`);
-      await this.telegram.ping(`Autonomous publish failed: ${msg}`);
+      this.log.warn(`Cron auto-publish failed for ${runId}: ${msg}`);
+      await this.telegram.ping(`Cron publish failed: ${msg}`);
     }
   }
 
-  /** @deprecated use finalizeAutonomous */
+  /** @deprecated use finalizeRun */
+  private async finalizeAutonomous(runId: string) {
+    await this.finalizeRun(runId);
+  }
+
+  /** @deprecated use finalizeRun */
   private async maybeAutoPublish(runId: string) {
-    await this.finalizeAutonomous(runId);
+    await this.finalizeRun(runId);
   }
 
   private async activeSamples() {

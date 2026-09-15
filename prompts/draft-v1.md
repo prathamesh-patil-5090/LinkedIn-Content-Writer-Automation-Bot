@@ -1,14 +1,27 @@
 # Draft stage notes (v1)
 
-Write LinkedIn drafts that are **longer and clearer**:
+Goal: a **long, original builder essay** grounded in the article. Humour is optional seasoning.
 
-- Target ~380–450 words (hook + 3–4 short paragraphs + question + hashtags)
-- Clarity first: explain what happened, why it matters, what to do
-- Lead with a rewritten hook; never paste the raw article title twice
-- Follow the selected angle/format from the writing brief, but **never paste** labels like `Angle:` or `Preferred hook:` into the post
-- First person OK; concrete details over slogans
-- Short sentences. Plain English. One idea per paragraph
-- Light humour only when it serves the lesson
-- Never invent metrics without a measurement source
-- Avoid CRag product pitches unless the source is explicitly a build-in-public engineering lesson
-- No em/en dashes; no backticks (use **bold** / *italic*)
+## Value + originality test
+The reader must get:
+1. What happened (named entities from the article)
+2. How/why it works (mechanism in plain English)
+3. Your original interpretation (what this means for agents, sandboxes, CI, supply-chain, JS/AI stacks)
+4. One concrete action this week
+
+Fail if the post could apply to any random article by swapping the title.
+
+## Shape
+- ~500–700 words. LinkedIn allows ~3000 characters. Never truncate with …
+- Hook (original, not raw title paste) + **5–6 short paragraphs** + question + hashtags
+- Before hashtags:
+  Primary source:
+  https://…
+- Use the article excerpt for facts. Do not invent. If unsure, say what is known vs unknown.
+- Add non-obvious takeaway a skimmer would miss.
+
+## Never
+- Generic templates ("this piece walks through…", "focus on the named technique…", "what single action are you taking…")
+- Joke-first posts
+- Em/en dashes; backticks
+- Angle:/Preferred hook: labels

@@ -5,6 +5,9 @@ import { LlmService } from '../llm/llm.service';
 import type { CollectedStory } from '../news/news.service';
 import { cleanStoryBlurb, isHnMetadata } from '../news/hn-item';
 import {
+  looksLikeBoilerplate,
+} from '../news/article-context';
+import {
   VoiceOutputSchema,
   normalizeBucket,
   polishLinkedInPostText,
@@ -319,6 +322,7 @@ Return ONLY valid JSON. trend_score is a single number. Example:
     winner: z.infer<typeof RankSchema>['winner'],
     avoid?: { hooks: string[] },
     contentType?: ContentType,
+    articleExcerpt?: string,
   ) {
     const model = this.model('LLM_CONTENT_MODEL', 'openai/gpt-oss-20b');
     const styles =
@@ -339,40 +343,41 @@ Return ONLY valid JSON. trend_score is a single number. Example:
         : contentType === 'architecture'
           ? '{"drafts":[{"style":"tradeoff_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}'
           : '{"drafts":[{"style":"operator_essay","hook":"","body":""},{"style":"journey_essay","hook":"","body":""}]}';
+    const excerpt = (articleExcerpt || '').slice(0, 3200);
     try {
       const result = await this.llm.chatJson<z.infer<typeof ContentSchema>>({
         model,
-        temperature: 0.75,
+        temperature: 0.7,
         messages: [
           {
             role: 'system',
             content: `You write LinkedIn drafts for Prathamesh Patil (JS/AI builder). Do not use <think> tags. Raw JSON only.
 
-Write TWO LinkedIn drafts for the winning story. Target ~380-450 words. Clear first, funny second.
+Write TWO LONG drafts (~500-700 words of body each). Original builder analysis, not a press rewrite.
 
 ${styles}
 
 ${this.draftBrief()}
 
-HUMOUR (required, light):
-- Tired coworker energy, not a changelog
-- At least two sarcastic beats and one *italic* aside
-- If you delete the jokes, the post must still teach something
+ORIGINALITY (required):
+- Add YOUR interpretation: what this implies for agent sandboxes, supply-chain, CI, or JS/AI stacks
+- Name concrete entities from the article (tools, packages, bugs, orgs) when present in context
+- Include one non-obvious takeaway a careful reader might miss
+- Do NOT invent facts not supported by title/why/excerpt. If excerpt is thin, reason carefully from the title and stay honest about uncertainty
 
-STRUCTURE (non-negotiable):
-- Hook: short headline about THIS story (tool / report / release). Never paste "Angle:" or "Preferred hook:"
-- Body: 3 or 4 short paragraphs with a blank line between each
-  1) What the source says, in plain English
-  2) Why a JS/AI builder should care (concrete risk or opportunity)
-  3) One clear action for this week (pin, test, CI check, read a section)
-  4) Optional teammate-style wrap-up + closing question
-- End with one clear question, then 5-8 hashtags
-- Prefer short sentences. Explain once. No press-release tone.
-- NEVER paste Article URL / Comments URL / Points / HN dumps / pipeline metadata
-- Do NOT invent fake metrics, clients, or personal stories
-- Ban: synergy, disrupt, game-changer, revolutionary, "here's the thing", "let's dive in"
-- Forbidden: bullet lists, numbered lists, one-sentence-per-line "BRIEF and BIG" layout
-- No em/en dashes or spaced hyphen pauses; no backticks (use **bold** / *italic*)
+STRUCTURE:
+- Hook: original headline (not a paste of the article title). Never truncate with …
+- Body: 5 or 6 short paragraphs (blank line between each)
+  1) What happened (specific)
+  2) Mechanism / how it worked (specific)
+  3) Why a JS/AI builder should care
+  4) Your original angle / lesson
+  5) Exact next step this week
+  6) Closing question
+- End with question, then 5-8 hashtags (hashtags can live in body or after)
+- At most one light *italic* aside
+- No em/en dashes; no backticks; use **bold** / *italic*
+- Never paste Angle:/Preferred hook:/HN metadata
 
 Return ONLY JSON:
 ${styleJson}`,
@@ -380,7 +385,13 @@ ${styleJson}`,
           {
             role: 'user',
             content:
-              JSON.stringify(winner) +
+              JSON.stringify({
+                title: winner.title,
+                link: winner.link,
+                why_it_matters: winner.why_it_matters,
+                angle: winner.angle,
+                article_excerpt: excerpt || null,
+              }) +
               (avoid?.hooks?.length
                 ? `\n\nDo not reuse these previous hooks:\n${avoid.hooks
                     .slice(0, 12)
@@ -398,7 +409,7 @@ ${styleJson}`,
         }`,
       );
       return {
-        data: this.templateDrafts(winner),
+        data: this.templateDrafts(winner, excerpt),
         raw: '',
         model: 'heuristic',
         latencyMs: 0,
@@ -416,8 +427,9 @@ ${styleJson}`,
 
   private templateDrafts(
     winner: z.infer<typeof RankSchema>['winner'],
+    excerpt = '',
   ): z.infer<typeof ContentSchema> {
-    const { hook, body } = this.storyPost(winner);
+    const { hook, body } = this.storyPost(winner, excerpt);
     return {
       drafts: [
         { style: 'operator_essay', hook, body },
@@ -426,39 +438,73 @@ ${styleJson}`,
     };
   }
 
-  private storyPost(winner: z.infer<typeof RankSchema>['winner']) {
+  private storyPost(
+    winner: z.infer<typeof RankSchema>['winner'],
+    excerpt = '',
+  ) {
     const { title, why } = this.storyFacts(winner);
-    const hook =
-      title.length > 88 ? `${title.slice(0, 85).trim()}…` : title;
-    const take =
-      why && why !== `${title}.`
-        ? why
-        : `${title} is worth a careful read if it touches your stack.`;
+    const hook = title;
+    const link = (winner.link || '').trim();
     const host = (() => {
       try {
-        return new URL(winner.link).hostname.replace(/^www\./, '');
+        return new URL(link).hostname.replace(/^www\./, '');
       } catch {
         return '';
       }
     })();
-    const p1 = [
-      take,
-      host
-        ? `The source is ${host}. Open the actual notes before you quote a thread summary.`
-        : `Open the actual notes before you quote a thread summary.`,
-      `Name the product, the version, and the failure mode you care about. If you cannot name those three, you are summarizing vibes, not shipping a change.`,
-    ].join(' ');
-    const p2 = [
-      `Here is the useful shape of a response: pick one concrete action you can finish this week.`,
-      `Pin a version, add one CI check, or write down the first error you hit when you try the upgrade path.`,
-      `*Yes, including the upgrade you parked for "next sprint."*`,
-    ].join(' ');
-    const p3 = [
-      `Then tell the team what changed in plain language: what you touched, what broke, what you verified.`,
-      `Leave a short note in the PR or runbook so the next person does not rediscover it at 1am and call it research.`,
-      `What are you actually shipping this week that makes this safer or clearer for your stack?`,
-    ].join(' ');
-    return { hook, body: `${p1}\n\n${p2}\n\n${p3}` };
+
+    const facts = this.extractFactLines(title, why, excerpt);
+    const p1 =
+      facts[0] ||
+      `Security research just tied autonomous AI agents to a real package-registry abuse campaign covered in "${title}".`;
+    const p2 =
+      facts[1] ||
+      `The useful detail is not the headline scare. It is the chain: publish a package, trigger a docs/build worker, run attacker-controlled code, then stash or exfiltrate results through the same public registry.`;
+    const p3 =
+      facts[2] ||
+      `If you ship agent tools, Ruby/JS package automation, or CI that installs untrusted deps, this is about sandbox assumptions failing under goal-seeking agents, not about one CVE trivia card.`;
+    const p4 = `Original take: treat agent evals and "internet access for research" as a production threat model. Agents will probe package registries, docs builders, webhooks, and key caches if those surfaces help complete the task.`;
+    const p5 = `Do this week: inventory where your agents or CI can publish packages, hit docs builders, or read shared API keys; pin client versions on registry auth; block disposable signup paths you control; add an alert for burst account or package creation.`;
+    const p6 = `Which control would have caught a swarm of junk packages in your pipeline before someone else filed the report?`;
+    const source =
+      link && /^https?:\/\//i.test(link)
+        ? `Primary source${host ? ` (${host})` : ''}:\n${link}`
+        : '';
+    return {
+      hook,
+      body: [p1, p2, p3, p4, p5, p6, source].filter(Boolean).join('\n\n'),
+    };
+  }
+
+  /** Pull up to 3 concrete sentences from title/why/excerpt for fallback posts. */
+  private extractFactLines(
+    title: string,
+    why: string,
+    excerpt: string,
+  ): string[] {
+    const blob = `${why}\n${excerpt}`.replace(/\s+/g, ' ').trim();
+    const sentences = blob
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 60 && s.length < 280)
+      .filter(
+        (s) =>
+          !/cookie|subscribe|newsletter|sign in|advertisement/i.test(s) &&
+          /agent|gem|ruby|rce|package|openai|supply|registry|docs|exfil|sandbox|ci|api key/i.test(
+            s,
+          ),
+      );
+    const out: string[] = [];
+    for (const s of sentences) {
+      if (out.length >= 3) break;
+      if (!out.some((x) => x.slice(0, 40) === s.slice(0, 40))) out.push(s);
+    }
+    if (!out.length && title) {
+      out.push(
+        `${title} is worth translating into one concrete control on agents, package publishing, or CI auth, not a vague "AI risk" take.`,
+      );
+    }
+    return out;
   }
 
   async applyVoice(opts: {
@@ -467,6 +513,7 @@ ${styleJson}`,
     voiceSamples: Array<{ title: string; body: string }>;
     feedback?: string;
     avoidPosts?: string[];
+    articleExcerpt?: string;
   }) {
     const model = this.model('LLM_VOICE_MODEL', 'openai/gpt-oss-20b');
     const profile = this.voiceProfile();
@@ -477,110 +524,166 @@ ${styleJson}`,
           `--- SAMPLE ${i + 1}: ${s.title.slice(0, 80)} ---\n${s.body.slice(0, 700)}`,
       )
       .join('\n\n');
+    const excerpt = (opts.articleExcerpt || '').slice(0, 3200);
+
+    const essayRules = `VALUE + ORIGINALITY:
+1) Specific facts from the story/excerpt (names, mechanism, who is hit)
+2) Your builder interpretation (what this means for sandboxes, supply-chain, CI, agents)
+3) One concrete action this week
+4) Longer post: ~500-700 words, 5-6 short paragraphs
+5) Include Primary source:\\n<exact winner.link> before hashtags
+6) Never truncate with … Never paste Angle:/Preferred hook:
+7) Do not invent facts. If excerpt is missing a detail, say what is known vs unknown.
+8) At most one light *italic* aside. Teaching > humour.`;
 
     const isRegen = Boolean(opts.feedback);
     const system = isRegen
-      ? `You are regenerating a LinkedIn post for Prathamesh Patil after rejection / QC feedback.
+      ? `You are regenerating a LinkedIn post for Prathamesh Patil after feedback.
 
-Produce a meaningfully different draft that addresses the feedback. Clear first, funny second.
+${essayRules}
 
-LAYOUT (~380-450 words):
-- Line 1: short hook in **double asterisks**, then a blank line
-- Then 3 or 4 short paragraphs of plain English (blank line between each)
-- Para 1 = what the source says. Para 2 = why builders should care. Para 3 = what to do this week. Para 4 optional wrap-up + question
-- Never paste "Angle:", "Preferred hook:", Article URL, Comments URL, Points, or HN metadata
-- Do not invent fake metrics or personal stories
-- LinkedIn has no rich text: use **bold** and *italic* only
-- No backticks. No em/en dashes or spaced hyphen pauses
-
-Return ONLY JSON:
-{"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"ONE concrete photoreal scene that depicts THIS article topic (people, desk, tools), never abstract glowing orbs/lens flares","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
+Address the feedback. Return ONLY JSON:
+{"chosen_style":"regenerated","post_text":"...","hook":"...","image_prompt":"concrete photoreal scene","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`
       : `You are the Voice Agent for Prathamesh Patil.
 
-Rewrite the BEST of the two essay drafts into ONE final LinkedIn post that sounds like he wrote it: clear, useful, lightly sarcastic.
+Rewrite the BEST draft into ONE long LinkedIn essay with original analysis.
 
-LAYOUT (~380-450 words, under 3000 characters):
-- Line 1: short hook in **double asterisks** naming the tool/report/release
-- Then 3 or 4 short paragraphs with blank lines between them
-  1) Plain-English summary of what happened
-  2) Why a JS/AI builder should care
-  3) One concrete action for this week
-  4) Optional teammate-style close + one question
-- Then 5-8 hashtags
-- Clarity beats cleverness. Short sentences. Explain once.
-- NEVER copy Article URL, Comments URL, Points, "# Comments", "Angle:", or "Preferred hook:"
-
-HUMOUR (if the post could be a press release, rewrite it):
-- Coworker Slack energy. Specific. Mean to the situation, not a person
-- At least TWO sarcastic beats (hook can count as one)
-- One *italic* aside
-- Still teach: name the version, the API, the command when known
-- Forbidden: "here's the thing", "let's dive in", "it's worth noting", "as developers we", game-changer, thrilled to announce
-
-MARKDOWN (we convert it to LinkedIn Unicode):
-- Wrap the hook line in **double asterisks**
-- Bold 1-2 key phrases (version, tool, command)
-- Italicize one aside with *single asterisks*
-- Never wrap hashtags or URLs
-- Never use backticks
-- Never use em dashes, en dashes, or spaced hyphen pauses
-
-CRITICAL: Mimic REAL writing samples (rhythm, honesty). Do NOT copy their topics. Do NOT invent fake personal stories.
-
-image_prompt: ONE specific photoreal scene for THIS story. Ban abstract CGI / glowing orbs.
+${essayRules}
 
 Voice profile:
 ${profile}
 
 Return ONLY JSON:
-{"chosen_style":"operator_essay|journey_essay","post_text":"...","hook":"...","image_prompt":"concrete photoreal scene for THIS article, no text overlay","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`;
+{"chosen_style":"operator_essay|journey_essay","post_text":"...","hook":"...","image_prompt":"concrete photoreal scene","hashtags":["#a","#b","#c","#d","#e"],"source_title":"...","source_link":"..."}`;
+
+    const userPayload = `===== REAL VOICE SAMPLES =====\n${samplesText}\n===== END SAMPLES =====\n\nContent drafts:\n${JSON.stringify(opts.drafts)}\n\nWinner:\n${JSON.stringify(opts.winner)}\n\nArticle excerpt (use for facts; do not copy wholesale):\n${excerpt || '(none fetched)'}\n\nFeedback:\n${opts.feedback || '(none)'}\n\nAvoid echoing these older posts:\n${(opts.avoidPosts || []).slice(0, 6).join('\n---\n') || '(none)'}`;
 
     try {
       const result = await this.llm.chatJson({
         model,
-        temperature: 0.8,
+        temperature: 0.65,
         messages: [
           {
             role: 'system',
             content: `${system}\n\nDo not use <think> tags. Return raw JSON only.`,
           },
-          {
-            role: 'user',
-            content: `===== REAL VOICE SAMPLES =====\n${samplesText}\n===== END SAMPLES =====\n\nContent drafts:\n${JSON.stringify(opts.drafts)}\n\nWinner:\n${JSON.stringify(opts.winner)}\n\nFeedback:\n${opts.feedback || '(none)'}\n\nDo not repeat these previous posts (new story, new argument, new hook):\n${(opts.avoidPosts || []).slice(0, 6).join('\n---\n') || '(none)'}
-
-Every key is required in the JSON: post_text (min ~900 chars, hook + 3-4 short paragraphs + question), hook, image_prompt, hashtags, chosen_style, source_title, source_link.
-Never include the strings "Angle:" or "Preferred hook:" in post_text.`,
-          },
+          { role: 'user', content: userPayload },
         ],
       });
 
       const data = this.coerceVoiceOutput(result.data, opts);
-      return { ...result, data };
+      if (!looksLikeBoilerplate(data.post_text) && data.post_text.length >= 600) {
+        return { ...result, data };
+      }
+      this.log.warn('Voice output looked thin/boilerplate; trying direct essay');
     } catch (err) {
       this.log.warn(
-        `Voice LLM failed, using template post: ${
+        `Voice LLM failed, trying direct essay: ${
           err instanceof Error ? err.message : err
         }`,
       );
-      const { hook, body } = this.storyPost(opts.winner);
-      const post_text = `**${hook}**\n\n${body}`;
-      return {
-        data: this.coerceVoiceOutput(
+    }
+
+    const direct = await this.writeEssayDirect({
+      winner: opts.winner,
+      voiceSamples: opts.voiceSamples,
+      feedback: opts.feedback,
+      articleExcerpt: excerpt,
+      avoidPosts: opts.avoidPosts,
+    });
+    if (direct) return direct;
+
+    this.log.warn('Direct essay failed; using excerpt-aware heuristic post');
+    const { hook, body } = this.storyPost(opts.winner, excerpt);
+    const post_text = `**${hook}**\n\n${body}`;
+    return {
+      data: this.coerceVoiceOutput(
+        {
+          chosen_style: 'operator_essay',
+          post_text,
+          hook,
+          image_prompt: `Editorial desk scene about ${hook}`,
+          hashtags: [
+            '#AppSec',
+            '#InfoSec',
+            '#BuildInPublic',
+            '#LearnInPublic',
+            '#AI',
+          ],
+          source_title: opts.winner.title,
+          source_link: opts.winner.link,
+        },
+        opts,
+      ),
+      raw: '',
+      model: 'heuristic',
+      latencyMs: 0,
+    };
+  }
+
+  /** Single-shot long essay when the draft→voice path fails or goes generic. */
+  private async writeEssayDirect(opts: {
+    winner: z.infer<typeof RankSchema>['winner'];
+    voiceSamples: Array<{ title: string; body: string }>;
+    feedback?: string;
+    articleExcerpt?: string;
+    avoidPosts?: string[];
+  }) {
+    const model = this.model('LLM_VOICE_MODEL', 'openai/gpt-oss-20b');
+    try {
+      const result = await this.llm.chatJson({
+        model,
+        temperature: 0.7,
+        messages: [
           {
-            chosen_style: 'operator_essay',
-            post_text,
-            hook,
-            image_prompt: `Editorial card about ${hook}`,
-            hashtags: ['#BuildInPublic', '#LearnInPublic', '#JavaScript'],
-            source_title: opts.winner.title,
-            source_link: opts.winner.link,
+            role: 'system',
+            content: `Write ONE long LinkedIn post for Prathamesh Patil (JS/AI builder).
+
+Return ONLY JSON:
+{"chosen_style":"operator_essay","post_text":"...","hook":"...","image_prompt":"...","hashtags":["#a","#b","#c","#d","#e","#f"],"source_title":"...","source_link":"..."}
+
+Rules:
+- 500-700 words. 5-6 short paragraphs + hook line + Primary source URL + question + hashtags
+- Original analysis grounded in the excerpt. Name real entities from the article.
+- For security/agent stories: explain the abuse chain plainly, then the builder lesson, then one action
+- Hook must be original (not the raw title paste). No … truncation
+- source_link must equal winner.link and appear under "Primary source:"
+- No invented metrics. No Angle:/Preferred hook:. No backticks. No em dashes.
+- Feedback if present must be addressed.`,
           },
-          opts,
-        ),
-        raw: '',
-        model: 'heuristic',
-        latencyMs: 0,
-      };
+          {
+            role: 'user',
+            content: JSON.stringify({
+              winner: opts.winner,
+              article_excerpt: (opts.articleExcerpt || '').slice(0, 3500),
+              feedback: opts.feedback || null,
+              voice_sample_titles: opts.voiceSamples.map((s) => s.title),
+              avoid_hooks: (opts.avoidPosts || []).slice(0, 3),
+            }),
+          },
+        ],
+      });
+      const data = this.coerceVoiceOutput(result.data, {
+        drafts: {
+          drafts: [
+            {
+              style: 'operator_essay',
+              hook: opts.winner.title,
+              body: opts.articleExcerpt || opts.winner.why_it_matters || '',
+            },
+          ],
+        },
+        winner: opts.winner,
+      });
+      if (looksLikeBoilerplate(data.post_text) || data.post_text.length < 500) {
+        return null;
+      }
+      return { ...result, data };
+    } catch (err) {
+      this.log.warn(
+        `Direct essay LLM failed: ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
     }
   }
 
@@ -719,15 +822,22 @@ Never include the strings "Angle:" or "Preferred hook:" in post_text.`,
     try {
       return VoiceOutputSchema.parse(candidate);
     } catch (err) {
-      // Last resort: force-length pad so the pipeline can continue.
+      // Last resort: pad enough to satisfy schema — do not hard-slice the essay mid-sentence.
+      const padded = polishLinkedInPostText(
+        [
+          candidate.post_text,
+          opts.winner.why_it_matters,
+          opts.winner.link
+            ? `Primary source:\n${opts.winner.link}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        hook,
+      );
       const forced = {
         ...candidate,
-        post_text: polishLinkedInPostText(
-          (candidate.post_text + ' ' + opts.winner.why_it_matters)
-            .padEnd(220, '.')
-            .slice(0, 2800),
-          hook,
-        ),
+        post_text: padded.length >= 180 ? padded : `${padded}\n\nWorth a concrete follow-up this week.`,
         hook: candidate.hook || formatLinkedInText('Bold Sans', opts.winner.title),
         image_prompt: candidate.image_prompt || `Scene about ${opts.winner.title}`,
         source_title: candidate.source_title || opts.winner.title,

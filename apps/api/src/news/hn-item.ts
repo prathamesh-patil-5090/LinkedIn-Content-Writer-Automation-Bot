@@ -32,8 +32,19 @@ export function articleUrlFromHn(text: string) {
   return m[1].replace(/[),.;]+$/, '');
 }
 
-export function cleanStoryBlurb(title: string, raw: string) {
+export function cleanStoryBlurb(title: string, raw: string, maxLen = 500) {
   const cleaned = stripHnMetadata(raw || '');
-  if (cleaned && !isHnMetadata(cleaned)) return cleaned.slice(0, 280);
+  if (cleaned && !isHnMetadata(cleaned)) {
+    return clipAtWordBoundary(cleaned, maxLen);
+  }
   return `${title.replace(/\s+/g, ' ').trim()}.`;
+}
+
+/** Prefer a clean cut at a word boundary; never append an ellipsis mid-title for hooks. */
+export function clipAtWordBoundary(text: string, maxLen: number) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (t.length <= maxLen) return t;
+  const cut = t.slice(0, maxLen);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > Math.floor(maxLen * 0.5) ? cut.slice(0, sp) : cut).trim();
 }

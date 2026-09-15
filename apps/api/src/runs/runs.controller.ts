@@ -132,7 +132,10 @@ export class RunsController {
       draft,
       meta,
       contentConfig: {
-        autonomousPublish: process.env.AUTONOMOUS_PUBLISH !== 'false',
+        // Manual Generate always needs Approve; only cron auto-publishes.
+        autonomousPublish: false,
+        cronAutoPublish: process.env.CRON_AUTO_PUBLISH !== 'false',
+        manualNeedsApproval: true,
       },
     };
   }
@@ -236,6 +239,8 @@ export class RunsController {
       hook: draft.hook || '',
       hashtags: draft.hashtags,
       category: winnerJson?.contentType || winnerJson?.winner?.angle,
+      sourceLink: draft.sourceLink,
+      sourceTitle: draft.sourceTitle,
     });
 
     await this.prisma.draft.update({
@@ -299,6 +304,31 @@ export class RunsController {
 
   @Post(':id/reject')
   async reject(@Param('id') id: string, @Body() body: FeedbackDto) {
+    const run = await this.prisma.run.findUnique({ where: { id } });
+    if (!run) throw new NotFoundException('Run not found');
+
+    await this.prisma.draft.updateMany({
+      where: {
+        runId: id,
+        status: { in: ['pending', 'auto_approved', 'approved'] },
+      },
+      data: {
+        status: 'rejected',
+        feedback: body.feedback?.trim() || 'rejected',
+      },
+    });
+    await this.prisma.run.update({
+      where: { id },
+      data: {
+        status: 'skipped',
+        errorMessage: body.feedback?.trim() || 'Rejected by user',
+      },
+    });
+    return { ok: true, runId: id };
+  }
+
+  @Post(':id/regenerate')
+  async regenerate(@Param('id') id: string, @Body() body: FeedbackDto) {
     try {
       const run = await this.pipeline.regenerate(id, body.feedback);
       return { run };
