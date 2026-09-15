@@ -99,4 +99,16 @@ describe('polishDraft', () => {
     expect(out.hashtags.length).toBeGreaterThanOrEqual(5);
     expect(out.postText).toMatch(/#BuildInPublic/);
   });
+
+  it('appends a clickable primary source URL', () => {
+    const out = polishDraft({
+      postText: '**Full hook title here.**\n\nBody with a complete lesson.',
+      hook: 'Full hook title here.',
+      hashtags: ['#BuildInPublic'],
+      sourceLink: 'https://dev.to/example/article',
+      sourceTitle: 'Example article',
+    });
+    expect(out.postText).toContain('https://dev.to/example/article');
+    expect(out.postText).toMatch(/Primary source/i);
+  });
 });

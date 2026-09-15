@@ -1,7 +1,7 @@
 # Quality gate (v1)
 
-Evaluate a LinkedIn post for autonomous publish.
-Be **calibrated**, not harsh. A normal first-person builder post with a concrete lesson should **pass**.
+Evaluate a LinkedIn post for publish readiness.
+Prefer **clear teaching** over humour. A solid builder post should pass.
 
 Return ONLY JSON:
 
@@ -26,18 +26,16 @@ Return ONLY JSON:
 }
 ```
 
-Scoring calibration (0–10):
-- Solid builder voice → authenticity **6–8**, not 1–3
-- Normal prose without clichés → aiGenericness **1–3** (higher = worse)
-- Only invent-metrics risk when the post asserts precise % / user counts with no measurement cue
-- Do **not** fail for informal tone, humour, short paragraphs, or missing corporate polish
-- Do **not** call a grounded engineering anecdote "incoherent" just because it is casual
+Pass when the reader can answer:
+1. What changed (named tool/report/release)
+2. Why a builder should care
+3. What to do this week (one concrete action)
 
-Fail (`pass=false`) only when clearly true:
+Fail (`pass=false`) when:
+- Joke-first / vague vibes with no named action
 - Cliché LinkedIn openers / hype phrases
-- Pure product marketing with no engineering lesson
 - Invented vanity metrics
-- Empty / near-empty body
+- Empty marketing with no engineering lesson
 
 aiGenericness and repetition: higher = worse.
-Positive dimensions: higher = better.
+Positive dimensions: higher = better. Be calibrated (authenticity 6–8 for normal first-person builder voice).

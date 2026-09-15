@@ -64,7 +64,11 @@ type TodayResponse = {
     selectedHook?: string | null;
     regenerationCount?: number;
   } | null;
-  contentConfig?: { autonomousPublish?: boolean } | null;
+  contentConfig?: {
+    autonomousPublish?: boolean;
+    cronAutoPublish?: boolean;
+    manualNeedsApproval?: boolean;
+  } | null;
 };
 
 const GENERATING = new Set([
@@ -290,6 +294,24 @@ export default function TodayPage() {
     }
   }
 
+  async function regen() {
+    if (!data?.run?.id) return;
+    setBusy('regen');
+    setError(null);
+    try {
+      await apiFetch(`/runs/${data.run.id}/regenerate`, {
+        method: 'POST',
+        body: JSON.stringify({ feedback: feedback || undefined }),
+      });
+      setFeedback('');
+      await loadToday();
+    } catch (err) {
+      setError(parseErr(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function skip() {
     if (!data?.run?.id) return;
     setBusy('skip');
@@ -343,11 +365,10 @@ export default function TodayPage() {
 
   const status = data?.run?.status ?? 'no_run';
   const generating = GENERATING.has(status);
-  const autonomous = data?.contentConfig?.autonomousPublish !== false;
   const pending =
     data?.draft?.status === 'pending' && status === 'pending_approval';
-  const showApprove = pending && !autonomous;
-  // Allow a new Generate whenever the pipeline is idle (supersedes pending drafts).
+  // Manual drafts always need Approve / Reject / Regen. Cron auto-publishes.
+  const showReviewActions = pending;
   const canGenerate = !generating;
   const winnerTitle =
     data?.run?.winnerJson?.winner?.title || data?.run?.winnerJson?.title;
@@ -360,9 +381,7 @@ export default function TodayPage() {
       email={me.email}
       kicker={
         me.linkedinConnected
-          ? data?.contentConfig?.autonomousPublish !== false
-            ? 'Autonomous mode: score → QC → publish. Dashboard is observability.'
-            : 'Kill-switch on: Approve required before publish.'
+          ? 'Manual Generate waits for Approve. Cron slots auto-publish after QC.'
           : 'LinkedIn is not connected — connect it in Settings.'
       }
     >
@@ -603,29 +622,30 @@ export default function TodayPage() {
                   />
                 </label>
               ) : null}
-              {data.draft?.sourceTitle ? (
+              {data.draft?.sourceTitle || data.draft?.sourceLink ? (
                 <p style={{ margin: 0, fontSize: 13 }}>
-                  {data.draft.sourceLink ? (
+                  Primary source:{' '}
+                  {data.draft?.sourceLink ? (
                     <a
                       href={data.draft.sourceLink}
                       target="_blank"
                       rel="noreferrer"
                       style={{ color: 'var(--accent-2)' }}
                     >
-                      {data.draft.sourceTitle}
+                      {data.draft.sourceTitle || data.draft.sourceLink}
                     </a>
                   ) : (
-                    data.draft.sourceTitle
+                    data.draft?.sourceTitle
                   )}
                 </p>
               ) : null}
               {pending ? (
                 <label className="field">
-                  <span>Reject feedback</span>
+                  <span>Feedback for Regen (optional)</span>
                   <input
                     value={feedback}
                     onChange={(e) => setFeedback(e.target.value)}
-                    placeholder="Shorter, more personal, different angle…"
+                    placeholder="More concrete action, clearer why, less humour…"
                   />
                 </label>
               ) : null}
@@ -644,7 +664,7 @@ export default function TodayPage() {
                 {busy === 'stop' ? 'Stopping…' : 'Stop'}
               </button>
             ) : null}
-            {showApprove ? (
+            {showReviewActions ? (
               <>
                 <button
                   className="btn"
@@ -663,9 +683,16 @@ export default function TodayPage() {
                 <button
                   className="btn"
                   disabled={!pending || busy !== null}
+                  onClick={() => void regen()}
+                >
+                  {busy === 'regen' ? 'Regenerating…' : 'Regen'}
+                </button>
+                <button
+                  className="btn danger"
+                  disabled={!pending || busy !== null}
                   onClick={() => void reject()}
                 >
-                  {busy === 'reject' ? 'Regenerating…' : 'Reject'}
+                  {busy === 'reject' ? 'Rejecting…' : 'Reject'}
                 </button>
               </>
             ) : null}
