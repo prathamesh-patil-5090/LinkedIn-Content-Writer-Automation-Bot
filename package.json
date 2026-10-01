@@ -19,6 +19,6 @@
     "db:studio": "pnpm --filter @ldp/api prisma:studio"
   },
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   }
 }
