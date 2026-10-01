@@ -150,9 +150,17 @@ export default function SettingsInner() {
           LinkedIn connected
         </p>
       ) : null}
-      {liFlash === 'error' || liFlash === 'state' ? (
+      {liFlash && liFlash !== 'connected' ? (
         <p className="error-text" style={{ marginBottom: 12 }}>
-          LinkedIn connect failed. Try again.
+          {liFlash === 'denied'
+            ? 'LinkedIn access was denied. Approve w_member_social and try again.'
+            : liFlash === 'state'
+              ? 'Connect timed out. Click Connect LinkedIn again.'
+              : liFlash === 'token'
+                ? 'LinkedIn token exchange failed. Check LINKEDIN_REDIRECT_URI matches the LinkedIn app callback exactly.'
+                : liFlash === 'missing'
+                  ? 'LinkedIn did not return an auth code. Try again.'
+                  : 'LinkedIn connect failed. Try again.'}
         </p>
       ) : null}
 
