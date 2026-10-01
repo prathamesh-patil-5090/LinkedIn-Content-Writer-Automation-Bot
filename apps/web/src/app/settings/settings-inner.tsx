@@ -27,10 +27,6 @@ type Settings = {
   };
 };
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ||
-  'http://localhost:3001/api/v1';
-
 export default function SettingsInner() {
   const router = useRouter();
   const search = useSearchParams();
@@ -116,6 +112,26 @@ export default function SettingsInner() {
     }
   }
 
+  async function connectLinkedIn() {
+    setBusy('li');
+    try {
+      // Must use credentials fetch (not a bare <a href>) so the session cookie
+      // is sent to the API on a separate Render host, then redirect to LinkedIn.
+      const res = await apiFetch<{ url: string }>(
+        '/linkedin/oauth/start?mode=json',
+      );
+      if (!res.url) throw new Error('No LinkedIn auth URL returned');
+      window.location.href = res.url;
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Could not start LinkedIn connect. Try logging in again.',
+      );
+      setBusy(null);
+    }
+  }
+
   const tg = settings?.integrations?.telegram;
   const storage = settings?.integrations?.storage;
 
@@ -194,9 +210,13 @@ export default function SettingsInner() {
               Disconnect
             </button>
           ) : (
-            <a className="btn primary" href={`${API_BASE}/linkedin/oauth/start`}>
-              Connect LinkedIn
-            </a>
+            <button
+              className="btn primary"
+              onClick={() => void connectLinkedIn()}
+              disabled={busy === 'li'}
+            >
+              {busy === 'li' ? 'Connecting…' : 'Connect LinkedIn'}
+            </button>
           )}
         </section>
 
