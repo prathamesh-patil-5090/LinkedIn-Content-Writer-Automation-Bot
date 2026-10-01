@@ -26,11 +26,28 @@ export class LinkedInController {
 
   @Get('oauth/start')
   @UseGuards(SessionAuthGuard)
-  start(@Req() req: Request, @Res() res: Response) {
+  async start(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Query('mode') mode?: string,
+  ) {
     const state = randomBytes(16).toString('hex');
     req.session.linkedinOauthState = state;
     req.session.linkedinOauthUserId = req.session.userId;
-    return res.redirect(this.linkedin.getAuthUrl(state));
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((err) => (err ? reject(err) : resolve()));
+    });
+
+    const url = this.linkedin.getAuthUrl(state);
+    // SPA / cross-origin: frontend must call this with credentials, then redirect.
+    // A bare <a href> to the API host often has no session cookie → 401 JSON.
+    const wantsJson =
+      mode === 'json' ||
+      (req.headers.accept || '').includes('application/json');
+    if (wantsJson) {
+      return res.json({ url });
+    }
+    return res.redirect(url);
   }
 
   @Get('oauth/callback')
