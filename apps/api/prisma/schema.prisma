@@ -251,7 +251,8 @@ model Settings {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("settings")
+  // Avoid colliding with other apps' generic key/value "settings" tables.
+  @@map("user_settings")
 }
 
 model Session {
