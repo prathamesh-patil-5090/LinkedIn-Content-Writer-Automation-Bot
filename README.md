@@ -61,11 +61,25 @@ See [docs/PRD.md](./docs/PRD.md) and [docs/setup-b2-telegram.md](./docs/setup-b2
 
 1. **Settings** → Connect LinkedIn (OAuth) · confirm Telegram / B2 tests
 2. **Voice** → keep samples active; optionally import LinkedIn `Shares.csv` / export zip
-3. **Today** → Generate now (or wait for the 2-hour IST cron) → edit draft → Approve / Reject / Skip
-4. Approve publishes text via LinkedIn `w_member_social` and adds the post to your voice bank
+3. **Today** → Generate now (or wait for the daily IST cron) → edit draft → Approve / Reject / Skip
+4. Approve publishes text via LinkedIn `w_member_social`
 5. **Runs** → history + pipeline logs
 
 Telegram gets a ping when a draft is ready (`APP_URL` link).
+
+## What gets posted
+
+**Two topic pillars.** Auto-picked stories come only from *AI Engineering / LLM Infrastructure* and *TypeScript / Full-Stack Systems*. Security news, CSS tips and other ecosystems are skipped for LinkedIn (the collector still stores them). The keyword lists live in `apps/api/src/content/topic-authority.ts`. A story you pick yourself with Generate is not filtered.
+
+**Curator point of view.** A post about someone else's article or repo is written in third person and credits them by name. "We built", "our team", "I tried" are treated as fabricated and fail the quality gate. First person is only allowed when the story link is under one of your own repos in `GITHUB_REPOS`.
+
+**Format.** 150–250 words: bold hook, one or two sentences of context, 3–4 bulleted trade-offs, a short read, a closing question. No links anywhere in the post; it ends with a name-only credit such as `Source: "Title" by author on DEV` so readers can search for it.
+
+**Quality gate.** A draft is sent back for a rewrite (up to `MAX_REGENERATION_ATTEMPTS`) when it has a first-person claim about third-party work, a banned phrase ("Here's how we did it", "The breakthrough came when", "Takeaway:", "In today's fast-paced…"), a link, the wrong length, no bullets, or no closing question. These rules are in `apps/api/src/content/post-rules.ts` and are shared with the writer prompts. `ai-generic` is a 0–10 penalty where **lower is better**; drafts above `AI_GENERICNESS_MAX` (default 3) also go back. If the writer model fails, the run fails. There is no template post.
+
+**Voice samples.** The writer learns rhythm from samples you added, imported, or saved with "Save to voice bank". Posts the app published on its own are stored but not fed back to the writer.
+
+Prompts are in `prompts/` (`draft-v2.md`, `hook-v2.md`, `angle-v2.md`, `qc-v2.md`, `event-scorer-v2.md`, `voice-profile.md`).
 
 ## Health
 
@@ -76,7 +90,7 @@ Telegram gets a ping when a draft is ready (`APP_URL` link).
 
 The API runs its own timer (`@nestjs/schedule`). On Render Hobby the web service stays up, so slots fire without cron-job.org, Vercel cron, or Render Cron Jobs.
 
-Slots: **6 posts/day** at 07, 10, 13, 16, 19, 22 `Asia/Kolkata`. Each cron run generates a **new** story and **publishes it** (`CRON_AUTO_PUBLISH=true`) — no Approve click. After 6 published posts that IST day, later ticks are skipped. Stories, source URLs, and post copy that were already used are skipped. Manual “Generate” still waits for Approve. Pause from Settings (`cronEnabled`) or set `CRON_ENABLED=false`.
+LinkedIn: **1 post/day** (max **5–7/week**) at **08:30** and **18:30** `Asia/Kolkata` (windows 08:30–10:00 · 18:30–20:00). The evening slot is a backup if morning did not publish. Each publish cron generates the **top-scored on-pillar** story (weekday rotation: Mon/Sat TypeScript, Tue/Thu/Sun AI, Wed how-to, Fri architecture) and **publishes it** (`CRON_AUTO_PUBLISH=true`) — no Approve click. Daily/weekly caps skip later ticks. A separate **6×/day** RSS collect cron (`07,10,13,16,19,22`) keeps SourceEvents fresh for surplus / X without LinkedIn self-cannibalization. Stories, source URLs, and post copy that were already used are skipped. Manual “Generate” still waits for Approve. Pause from Settings (`cronEnabled`) or set `CRON_ENABLED=false`.
 
 Set `TZ=Asia/Kolkata` on the Render **API** service. Keep a single API instance so two processes cannot double-post.
 

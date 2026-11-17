@@ -19,11 +19,14 @@ import { polishDraft } from '../linkedin/polish';
 import { articleUrlFromHn, cleanStoryBlurb, isHnMetadata } from '../news/hn-item';
 import { fetchArticleExcerpt } from '../news/article-context';
 import {
-  contentTypeForHour,
+  contentTypeForDay,
   cronWindowStatus,
-  POSTS_PER_DAY,
+  linkedInCaps,
   startOfIstDay,
+  startOfIstWeek,
 } from '../scheduler/cron-window';
+import { topicPillar } from '../content/topic-authority';
+import { POST_WORDS } from '../content/post-rules';
 import { ContentConfigService } from '../content/content-config.service';
 import { SourceEventsService } from '../content/source-events.service';
 import { OpportunityScorerService } from '../content/opportunity-scorer.service';
@@ -41,9 +44,16 @@ class PipelineCancelledError extends Error {
   }
 }
 
+/** Stories pulled per run before the topic-pillar filter narrows them. */
+const COLLECT_POOL = 120;
+/** On-pillar stories handed to the research agent. */
+const RESEARCH_POOL = 40;
+
 type IntelligenceContext = {
   opportunityId?: string;
   sourceEventId?: string;
+  /** True when the story is the author's own project (first person allowed). */
+  ownWork: boolean;
   pillar: ContentPillar;
   format?: string;
   contentScore: number;
@@ -102,10 +112,18 @@ export class PipelineService {
     await this.clearOrphanedGenerating();
 
     if (triggeredBy === 'cron') {
-      const posted = await this.postsPublishedToday();
-      if (posted >= POSTS_PER_DAY) {
+      const { postsPerDay, postsPerWeek } = linkedInCaps();
+      const postedToday = await this.postsPublishedToday();
+      if (postedToday >= postsPerDay) {
         throw Object.assign(
-          new Error(`Daily cap reached (${POSTS_PER_DAY} posts)`),
+          new Error(`Daily LinkedIn cap reached (${postsPerDay} post/day)`),
+          { status: 409 },
+        );
+      }
+      const postedWeek = await this.postsPublishedThisWeek();
+      if (postedWeek >= postsPerWeek) {
+        throw Object.assign(
+          new Error(`Weekly LinkedIn cap reached (${postsPerWeek} posts/week)`),
           { status: 409 },
         );
       }
@@ -311,11 +329,7 @@ export class PipelineService {
         select: { triggeredBy: true },
       });
       if (runRow?.triggeredBy === 'cron') {
-        const securityToday = await this.securityPostedToday();
-        contentType = contentTypeForHour(
-          cronWindowStatus().istHour,
-          securityToday,
-        );
+        contentType = contentTypeForDay(cronWindowStatus().istWeekday);
       }
 
       if (selectedStory) {
@@ -390,8 +404,14 @@ export class PipelineService {
             );
           }
         }
-        const { stories, collectedAt } = await this.news.collect(40);
+        const collected = await this.news.collect(COLLECT_POOL);
+        const collectedAt = collected.collectedAt;
         await this.assertNotCancelled(runId);
+        // Topic authority: auto-pick only from the two pillars. The collector
+        // cron still stores the whole feed for X; this narrows LinkedIn only.
+        const stories = collected.stories
+          .filter((s) => topicPillar(s.title, s.summary))
+          .slice(0, RESEARCH_POOL);
         const eventRows = await this.sourceEvents.normalizeStories(stories);
         const eventByLink = new Map(
           eventRows.map((e) => [e.story.link, e.id] as const),
@@ -404,15 +424,26 @@ export class PipelineService {
             storyCount: fresh.length,
           },
         });
-        await this.logStep(runId, 'collect', `${fresh.length} unused of ${stories.length}`, {
-          count: fresh.length,
-          collected: stories.length,
-          sourceEvents: eventRows.length,
-        });
+        await this.logStep(
+          runId,
+          'collect',
+          `${fresh.length} unused of ${stories.length} on-pillar (${collected.stories.length} collected)`,
+          {
+            count: fresh.length,
+            onPillar: stories.length,
+            collected: collected.stories.length,
+            sourceEvents: eventRows.length,
+          },
+        );
 
+        if (stories.length === 0) {
+          throw new Error(
+            `No on-pillar stories today: none of the ${collected.stories.length} collected stories fit AI engineering or TypeScript / full-stack`,
+          );
+        }
         if (fresh.length === 0) {
           throw new Error(
-            'No unused stories left — every candidate was already posted or drafted',
+            'No unused stories left — every on-pillar candidate was already posted or drafted',
           );
         }
 
@@ -420,10 +451,20 @@ export class PipelineService {
         await this.assertNotCancelled(runId);
         const research = await this.agents.research(fresh, contentType);
         await this.assertNotCancelled(runId);
-        const unusedTop = used.unusedStories(research.data.top_stories);
+        // Keep only stories from the on-pillar list the agent was given, with
+        // the link we collected rather than whatever the model typed back.
+        const linkKey = (l: string) => l.trim().replace(/\/+$/, '').toLowerCase();
+        const byLink = new Map(fresh.map((s) => [linkKey(s.link), s] as const));
+        const byTitle = new Map(fresh.map((s) => [s.title.trim(), s] as const));
+        const unusedTop = used.unusedStories(
+          research.data.top_stories.flatMap((s) => {
+            const known = byLink.get(linkKey(s.link)) || byTitle.get(s.title.trim());
+            return known ? [{ ...s, title: known.title, link: known.link }] : [];
+          }),
+        );
         if (unusedTop.length === 0) {
           throw new Error(
-            'Research only returned stories that were already used',
+            'Research returned no unused on-pillar stories',
           );
         }
         const researchData = { top_stories: unusedTop };
@@ -692,23 +733,51 @@ export class PipelineService {
     });
   }
 
-  private async securityPostedToday() {
-    const since = startOfIstDay();
-    const runs = await this.prisma.run.findMany({
+  private async postsPublishedThisWeek() {
+    return this.prisma.run.count({
       where: {
         status: 'published',
-        publishedAt: { gte: since },
+        publishedAt: { gte: startOfIstWeek() },
       },
-      select: { winnerJson: true },
     });
-    return runs.some((r) => {
-      const w = r.winnerJson as {
-        contentType?: string;
-        winner?: { angle?: string };
-      } | null;
-      const type = w?.contentType || w?.winner?.angle;
-      return normalizeBucket(type) === 'security-bug';
-    });
+  }
+
+  /** RSS collect + SourceEvent upsert only — no LinkedIn generate/publish. */
+  async collectFeedOnly(cap = 40) {
+    const { stories } = await this.news.collect(cap);
+    const eventRows = await this.sourceEvents.normalizeStories(stories);
+    return {
+      stories: stories.length,
+      sourceEvents: eventRows.length,
+      collectedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * The author's own project: the story link sits under a repo listed in
+   * GITHUB_REPOS. Everything else is someone else's work and is written in
+   * third person.
+   */
+  private isOwnWork(link: string): boolean {
+    const repos = this.contentConfig
+      .githubRepos()
+      .map((r) => r.toLowerCase().replace(/\.git$/, ''));
+    if (!repos.length) return false;
+    try {
+      const url = new URL(link);
+      if (url.hostname.replace(/^www\./i, '').toLowerCase() !== 'github.com') {
+        return false;
+      }
+      const slug = url.pathname
+        .split('/')
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('/')
+        .toLowerCase();
+      return repos.includes(slug);
+    } catch {
+      return false;
+    }
   }
 
   private pickUniqueWinner(
@@ -814,6 +883,8 @@ export class PipelineService {
           ),
       angle: intel?.selectedAngle || winner.angle,
     };
+    // Same answer the quality gate will use for this draft.
+    const ownWork = intel?.ownWork ?? this.isOwnWork(winner.link);
     const articleExcerpt = await fetchArticleExcerpt(winner.link);
     if (articleExcerpt) {
       await this.logStep(
@@ -828,14 +899,21 @@ export class PipelineService {
       { hooks: used.hooks },
       contentType,
       articleExcerpt,
+      ownWork,
     );
-    await this.logStep(runId, 'content', '2 essay drafts', drafts.data, drafts.latencyMs);
+    await this.logStep(
+      runId,
+      'content',
+      `${drafts.data.drafts.length} breakdown drafts`,
+      drafts.data,
+      drafts.latencyMs,
+    );
 
     const samples = await this.activeSamples();
     let profileNote = '';
     try {
       const profile = await this.writingProfile.getActive();
-      profileNote = this.writingProfile.formatForPrompt(profile);
+      profileNote = this.writingProfile.formatForPrompt(profile, { ownWork });
     } catch {
       /* optional */
     }
@@ -844,6 +922,7 @@ export class PipelineService {
       winner,
       voiceSamples: samples,
       articleExcerpt,
+      ownWork,
       feedback: [
         feedback,
         intel
@@ -852,11 +931,13 @@ export class PipelineService {
               `- Angle to follow: ${intel.selectedAngle}`,
               `- Preferred hook energy (rewrite in your words, do not paste verbatim): ${intel.selectedHook}`,
               `- Pillar: ${intel.pillar}`,
-              `- Format: ${intel.format || 'engineering_story'}`,
+              `- Format: ${intel.format || 'technical_breakdown'}`,
             ].join('\n')
           : null,
         profileNote || null,
-        'Write a LONG original essay (~500-700 words): specific facts from the article, your builder interpretation, one concrete action. Include Primary source URL. Never use generic boilerplate.',
+        ownWork
+          ? `Short scannable breakdown, ${POST_WORDS.targetMin}-${POST_WORDS.targetMax} words: bold hook, bulleted trade-offs, closing question. No links.`
+          : `Short scannable breakdown, ${POST_WORDS.targetMin}-${POST_WORDS.targetMax} words: bold hook, bulleted trade-offs, closing question. No links. This is someone else's work: third person, credit them by name, no "we" or "our".`,
       ]
         .filter(Boolean)
         .join('\n'),
@@ -903,8 +984,10 @@ export class PipelineService {
       hashtags: voice.data.hashtags,
       category: contentType || normalizeBucket(winner.angle),
       avoidHashtags: used.recentHashtags(14),
-      sourceLink: voice.data.source_link || winner.link,
-      sourceTitle: voice.data.source_title || winner.title,
+      // Curated posts end with a name-only credit built from the story we
+      // collected (not the model's echo of it). Own work needs no credit.
+      sourceLink: ownWork ? null : winner.link,
+      sourceTitle: ownWork ? null : winner.title,
     });
     voice = {
       ...voice,
@@ -958,17 +1041,22 @@ export class PipelineService {
       boosts[p as ContentPillar] = (boosts[p as ContentPillar] || 0) + (b || 0);
     }
 
-    let pillar = scored.pillar;
-    // Soft preference: if boost for another pillar is high, keep scored pillar
-    // but note diversity in angle generation.
-    const diversityNote = `Recent pillar boosts: ${JSON.stringify(boosts)}`;
+    const ownWork = this.isOwnWork(winner.link);
+    // build_in_public / personal / product are styles for the author's own
+    // projects. Someone else's story is always an engineering breakdown, and
+    // the diversity note (which nudges toward those styles) is left out.
+    const pillar: ContentPillar = ownWork ? scored.pillar : 'engineering';
+    const diversityNote = ownWork
+      ? `Recent pillar boosts: ${JSON.stringify(boosts)}`
+      : undefined;
 
     const angles = await this.angleHook.generateAngles({
       title: winner.title,
       why: winner.why_it_matters,
       pillar,
-      formatHint: scored.format,
+      formatHint: ownWork ? scored.format : undefined,
       diversityNote,
+      ownWork,
     });
     const used = await loadUsedIndex(this.prisma);
     const hooks = await this.angleHook.generateHooks({
@@ -976,6 +1064,7 @@ export class PipelineService {
       angle: angles.selected.angle,
       pillar,
       avoidHooks: used.hooks.slice(0, 20),
+      ownWork,
     });
 
     if (scored.opportunityId) {
@@ -984,7 +1073,7 @@ export class PipelineService {
         data: {
           status: 'selected',
           pillar,
-          format: angles.selected.format || scored.format,
+          format: angles.selected.format || (ownWork ? scored.format : undefined),
           anglesJson: angles.angles,
           hooksJson: hooks.hooks,
           selectedAngle: angles.selected.angle,
@@ -999,13 +1088,15 @@ export class PipelineService {
       angle: angles.selected.angle,
       hook: hooks.selected.text,
       boosts,
+      ownWork,
     });
 
     return {
       opportunityId: scored.opportunityId,
       sourceEventId: opts?.sourceEventId,
+      ownWork,
       pillar,
-      format: angles.selected.format || scored.format,
+      format: angles.selected.format || (ownWork ? scored.format : undefined),
       contentScore: scored.contentScore,
       scoresJson: scored.scores,
       selectedAngle: angles.selected.angle,
@@ -1047,40 +1138,50 @@ export class PipelineService {
       ),
     ];
     const errors: string[] = [];
+    let best: {
+      winner: typeof primary;
+      intel: IntelligenceContext;
+      contentScore: number;
+    } | null = null;
+
+    // Score the pool and keep the highest contentScore (top 1 for the day).
     for (const candidate of ordered.slice(0, 6)) {
       if (used.matchesStory(candidate.title, candidate.link)) continue;
       try {
         const intel = await this.buildIntelligence(runId, candidate, {
           sourceEventId: eventByLink.get(candidate.link),
         });
-        return {
-          winner: {
-            title: candidate.title,
-            link: candidate.link,
-            why_it_matters: candidate.why_it_matters,
-            angle: candidate.angle,
-            trend_score:
-              'trend_score' in candidate
-                ? candidate.trend_score
-                : primary.trend_score,
-            prediction_reason:
-              'prediction_reason' in candidate &&
-              (candidate as { prediction_reason?: string }).prediction_reason
-                ? String(
-                    (candidate as { prediction_reason?: string })
-                      .prediction_reason,
-                  )
-                : contentType
-                  ? `Scored unused ${contentType} story`
-                  : 'Scored unused story',
-          },
-          intel,
+        const winner = {
+          title: candidate.title,
+          link: candidate.link,
+          why_it_matters: candidate.why_it_matters,
+          angle: candidate.angle,
+          trend_score:
+            'trend_score' in candidate
+              ? candidate.trend_score
+              : primary.trend_score,
+          prediction_reason:
+            'prediction_reason' in candidate &&
+            (candidate as { prediction_reason?: string }).prediction_reason
+              ? String(
+                  (candidate as { prediction_reason?: string })
+                    .prediction_reason,
+                )
+              : contentType
+                ? `Top scored unused ${contentType} story`
+                : 'Top scored unused story',
         };
+        if (!best || intel.contentScore > best.contentScore) {
+          best = { winner, intel, contentScore: intel.contentScore };
+        }
       } catch (err) {
         errors.push(
           `${candidate.title}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+    if (best) {
+      return { winner: best.winner, intel: best.intel };
     }
     throw new Error(
       `All candidates failed opportunity gate: ${errors.slice(0, 3).join(' | ')}`,
@@ -1125,6 +1226,7 @@ export class PipelineService {
         pillar: intel.pillar,
         used,
         regenerationCount: regen,
+        ownWork: intel.ownWork,
       });
 
       await this.logStep(runId, 'quality_gate', qc.decision, {
@@ -1158,7 +1260,7 @@ export class PipelineService {
       lastFeedback = [
         lastFeedback,
         qc.feedback,
-        `QC failed: ${(qc.reasons || []).join('; ')}. Rewrite for authenticity and specificity.`,
+        `QC failed: ${(qc.reasons || []).join('; ')}. Fix each of these in the rewrite.`,
       ]
         .filter(Boolean)
         .join('\n');
@@ -1263,11 +1365,11 @@ export class PipelineService {
         selectedAngle: intel.selectedAngle,
         selectedHook: intel.selectedHook,
         promptVersions: {
-          scorer: 'event-scorer-v1',
-          angle: 'angle-v1',
-          hook: 'hook-v1',
-          draft: 'draft-v1',
-          qc: 'qc-v1',
+          scorer: 'event-scorer-v2',
+          angle: 'angle-v2',
+          hook: 'hook-v2',
+          draft: 'draft-v2',
+          qc: 'qc-v2',
         } as object,
         regenerationCount,
       },
@@ -1440,8 +1542,11 @@ export class PipelineService {
   }
 
   private async activeSamples() {
+    // Only posts the author wrote. Posts this app published are excluded:
+    // feeding the model its own output as "voice" makes each run drift
+    // further toward whatever the last run got wrong.
     return this.prisma.voiceSample.findMany({
-      where: { isActive: true },
+      where: { isActive: true, NOT: { source: 'published_by_app' } },
       orderBy: [{ createdAt: 'desc' }],
       take: 3,
       select: { title: true, body: true },

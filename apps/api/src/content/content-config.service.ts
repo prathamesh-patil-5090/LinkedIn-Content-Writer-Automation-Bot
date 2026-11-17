@@ -27,8 +27,9 @@ export class ContentConfigService {
     return num(this.config.get('AUTHENTICITY_THRESHOLD'), 5);
   }
 
+  /** 0-10 penalty, higher is worse. Each generic phrase adds 2.5. */
   aiGenericnessMax(): number {
-    return num(this.config.get('AI_GENERICNESS_MAX'), 5);
+    return num(this.config.get('AI_GENERICNESS_MAX'), 3);
   }
 
   similarityReject(): number {

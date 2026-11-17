@@ -6,7 +6,7 @@ import { MediaService } from '../media/media.service';
 import { LinkedInService } from '../linkedin/linkedin.service';
 import { DbRecoveryService } from './db-recovery.service';
 import {
-  contentTypeForHour,
+  contentTypeForDay,
   cronWindowStatus,
 } from '../scheduler/cron-window';
 
@@ -96,7 +96,7 @@ export class HealthController {
           this.config.get('CRON_ENABLED') !== 'false',
         autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
         ...cronWindowStatus(),
-        nextType: contentTypeForHour(cronWindowStatus().istHour, false),
+        nextType: contentTypeForDay(cronWindowStatus().istWeekday),
       },
       dbRecovery: this.dbRecovery.status(),
     };

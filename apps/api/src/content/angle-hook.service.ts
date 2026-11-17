@@ -10,6 +10,7 @@ import {
   type HookCandidate,
 } from '@ldp/shared';
 import { LlmService } from '../llm/llm.service';
+import { firstPersonClaims } from './post-rules';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -31,6 +32,15 @@ const BANNED_HOOK_STARTS = [
   'thoughts?',
 ];
 
+/** Formats that work as a third-person read of someone else's work. */
+const CURATED_FORMATS: ContentFormat[] = [
+  'technical_breakdown',
+  'architecture_breakdown',
+  'educational',
+  'opinion',
+  'technical_lesson',
+];
+
 @Injectable()
 export class AngleHookService {
   private readonly log = new Logger(AngleHookService.name);
@@ -43,18 +53,27 @@ export class AngleHookService {
     pillar: ContentPillar;
     formatHint?: string;
     diversityNote?: string;
+    /** True when the story is the author's own project (first person allowed). */
+    ownWork?: boolean;
   }): Promise<{ angles: AngleCandidate[]; selected: AngleCandidate }> {
     const prompt = this.loadPrompt(
-      'angle-v1.md',
-      `Generate 5-6 LinkedIn content angles for a developer audience. Prefer concrete engineering stories over product marketing. Avoid CRag hype. Return JSON { angles: [{ label, angle, format, score, rationale }] }.`,
+      'angle-v2.md',
+      `Generate 5-6 LinkedIn content angles for a developer audience. When sourceKind is "curated" the story is someone else's work: every angle is a third-person read of it, never a story about the poster building it. Avoid CRag hype. Return JSON { angles: [{ label, angle, format, score, rationale }] }.`,
     );
+    const { ownWork, ...input } = opts;
     let angles: AngleCandidate[];
     try {
       const result = await this.llm.chatJson<unknown>({
         model: process.env.LLM_CONTENT_MODEL || 'openai/gpt-oss-20b',
         messages: [
           { role: 'system', content: prompt },
-          { role: 'user', content: JSON.stringify(opts) },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              ...input,
+              sourceKind: ownWork ? 'own_work' : 'curated',
+            }),
+          },
         ],
       });
       angles = AnglesSchema.parse(result.data).angles;
@@ -63,6 +82,17 @@ export class AngleHookService {
         `Angle LLM failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       angles = this.fallbackAngles(opts);
+    }
+    if (!ownWork) {
+      // Someone else's work: no "how we built it" angles, no first-person formats.
+      const honest = angles.filter((a) => !firstPersonClaims(a.angle).length);
+      angles = (honest.length ? honest : this.fallbackAngles(opts)).map((a) => ({
+        ...a,
+        format:
+          a.format && CURATED_FORMATS.includes(a.format)
+            ? a.format
+            : 'technical_breakdown',
+      }));
     }
     angles = angles
       .map((a) => ({
@@ -78,18 +108,27 @@ export class AngleHookService {
     angle: string;
     pillar: ContentPillar;
     avoidHooks?: string[];
+    /** True when the story is the author's own project (first person allowed). */
+    ownWork?: boolean;
   }): Promise<{ hooks: HookCandidate[]; selected: HookCandidate }> {
     const prompt = this.loadPrompt(
-      'hook-v1.md',
-      `Generate 5-10 LinkedIn hooks. Categories: curiosity, contrarian, story, result, mistake, lesson. Ban cliché openers. No em dashes. Return JSON { hooks: [{ text, category, score }] }.`,
+      'hook-v2.md',
+      `Generate 5-10 LinkedIn hooks. When sourceKind is "curated" the story is someone else's work: state the pattern or trade-off, never claim an experience ("I built", "we", "our"). Ban cliché openers. No em dashes. Return JSON { hooks: [{ text, category, score }] }.`,
     );
+    const { ownWork, ...input } = opts;
     let hooks: HookCandidate[];
     try {
       const result = await this.llm.chatJson<unknown>({
         model: process.env.LLM_CONTENT_MODEL || 'openai/gpt-oss-20b',
         messages: [
           { role: 'system', content: prompt },
-          { role: 'user', content: JSON.stringify(opts) },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              ...input,
+              sourceKind: ownWork ? 'own_work' : 'curated',
+            }),
+          },
         ],
       });
       hooks = HooksSchema.parse(result.data).hooks;
@@ -104,6 +143,7 @@ export class AngleHookService {
     );
     hooks = hooks
       .filter((h) => !this.isBannedHook(h.text))
+      .filter((h) => ownWork || !firstPersonClaims(h.text).length)
       .filter((h) => !avoid.has(h.text.toLowerCase().slice(0, 40)))
       .map((h) => ({
         ...h,
@@ -173,8 +213,8 @@ export class AngleHookService {
         score: 7,
       },
       {
-        text: `I almost shipped the wrong fix for this.`,
-        category: 'mistake',
+        text: `The trade-off inside ${short} is easy to miss.`,
+        category: 'tradeoff',
         score: 7.2,
       },
       {

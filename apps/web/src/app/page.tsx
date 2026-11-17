@@ -433,8 +433,11 @@ export default function TodayPage() {
                     </span>
                   ) : null}
                   {meta?.aiGenericnessScore != null ? (
-                    <span className="pill">
-                      ai-generic {meta.aiGenericnessScore}
+                    <span
+                      className="pill"
+                      title="Penalty from 0 to 10. Lower is better; drafts above the AI_GENERICNESS_MAX limit are sent back."
+                    >
+                      ai-generic {meta.aiGenericnessScore}/10 (lower is better)
                     </span>
                   ) : null}
                   {meta?.regenerationCount != null &&

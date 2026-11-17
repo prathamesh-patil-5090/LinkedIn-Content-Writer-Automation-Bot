@@ -4,8 +4,9 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.module';
 import { PipelineService } from '../pipeline/pipeline.service';
 import {
-  IST_CRON_HOURS,
-  POSTS_PER_DAY,
+  IST_PUBLISH_SLOTS,
+  linkedInCaps,
+  linkedInScheduleLabel,
   cronWindowStatus,
   shouldRunCronSlot,
 } from './cron-window';
@@ -25,24 +26,52 @@ export class SchedulerService implements OnModuleInit {
     const enabled = this.config.get('CRON_ENABLED') !== 'false';
     const autoPublish = this.config.get('CRON_AUTO_PUBLISH') !== 'false';
     const win = cronWindowStatus();
+    const { postsPerDay, postsPerWeek } = linkedInCaps();
     if (disabled || !enabled) {
       this.log.warn(
-        `Daily ${POSTS_PER_DAY}-post cron is OFF (CRON_DISABLED=${disabled}, CRON_ENABLED=${enabled}). Slots: ${IST_CRON_HOURS.join(',')} IST.`,
+        `LinkedIn ${postsPerDay}/day cron is OFF (CRON_DISABLED=${disabled}, CRON_ENABLED=${enabled}). Slots: ${IST_PUBLISH_SLOTS.join(', ')} IST · max ${postsPerWeek}/week.`,
       );
       return;
     }
     this.log.log(
-      `Daily ${POSTS_PER_DAY}-post cron ARMED · ${IST_CRON_HOURS.join(',')} Asia/Kolkata · autoPublish=${autoPublish} · now ${win.istHour}:${String(win.istMinute).padStart(2, '0')} IST`,
+      `LinkedIn cron ARMED · ${linkedInScheduleLabel()} · autoPublish=${autoPublish} · news collect keeps 6×/day · now ${win.istHour}:${String(win.istMinute).padStart(2, '0')} IST`,
     );
   }
 
-  /** Six IST slots: 07, 10, 13, 16, 19, 22. Render keeps this process up. */
-  @Cron('0 7,10,13,16,19,22 * * *', {
+  /**
+   * LinkedIn publish attempts: 08:30 + 18:30 IST.
+   * Daily/weekly caps ensure at most one publish per day.
+   */
+  @Cron('30 8,18 * * *', {
     timeZone: 'Asia/Kolkata',
     name: 'ist-generate-publish',
   })
   async nestSlot() {
     await this.tick('nest');
+  }
+
+  /**
+   * High-frequency RSS collect (former 6×/day cadence) — stores SourceEvents
+   * for X/Twitter surplus and richer LinkedIn candidate pools. No publish.
+   */
+  @Cron('0 7,10,13,16,19,22 * * *', {
+    timeZone: 'Asia/Kolkata',
+    name: 'ist-news-collect',
+  })
+  async nestCollect() {
+    if (this.config.get('CRON_DISABLED') === 'true') return;
+    if (this.config.get('CRON_ENABLED') === 'false') return;
+    if (this.config.get('COLLECT_CRON_ENABLED') === 'false') return;
+    try {
+      const result = await this.pipeline.collectFeedOnly();
+      this.log.log(
+        `News collect: ${result.stories} stories → ${result.sourceEvents} source events`,
+      );
+    } catch (err) {
+      this.log.warn(
+        `News collect failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async tick(source: 'nest' | 'http', force = false) {
@@ -63,7 +92,7 @@ export class SchedulerService implements OnModuleInit {
         source,
         istHour: win.istHour,
         istMinute: win.istMinute,
-        hours: IST_CRON_HOURS,
+        slots: IST_PUBLISH_SLOTS,
       };
     }
 
@@ -74,8 +103,9 @@ export class SchedulerService implements OnModuleInit {
 
     try {
       const run = await this.pipeline.startRun('cron');
+      const win = cronWindowStatus();
       this.log.log(
-        `Cron (${source}) started run ${run.id} · slot ${cronWindowStatus().istHour}:00 IST`,
+        `Cron (${source}) started run ${run.id} · ${String(win.istHour).padStart(2, '0')}:${String(win.istMinute).padStart(2, '0')} IST`,
       );
       return { ok: true, runId: run.id, source };
     } catch (err) {
