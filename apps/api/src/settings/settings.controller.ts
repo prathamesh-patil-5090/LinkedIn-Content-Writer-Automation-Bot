@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { CurrentUser, SessionAuthGuard, SessionUser } from '../auth/session.guard';
 import { TelegramService } from '../notifications/telegram.service';
 import { MediaService } from '../media/media.service';
+import { linkedInScheduleLabel } from '../scheduler/cron-window';
 
 class UpdateSettingsDto {
   @IsOptional()
@@ -61,7 +62,7 @@ export class SettingsController {
         storage,
       },
       cron: {
-        schedule: '6 posts/day · 07:00, 10:00, 13:00, 16:00, 19:00, 22:00 Asia/Kolkata',
+        schedule: linkedInScheduleLabel(),
         autoPublish: this.config.get('CRON_AUTO_PUBLISH') !== 'false',
         disabledByEnv: this.config.get('CRON_DISABLED') === 'true',
         envEnabled: this.config.get('CRON_ENABLED') !== 'false',

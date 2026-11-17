@@ -5,7 +5,7 @@
   "description": "Personal LinkedIn daily poster — NestJS + Next.js",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter @ldp/api --filter @ldp/web dev",
+    "dev": "pnpm --filter @ldp/shared build && pnpm -r --parallel --filter @ldp/shared --filter @ldp/api --filter @ldp/web dev",
     "dev:api": "pnpm --filter @ldp/api dev",
     "dev:web": "pnpm --filter @ldp/web dev",
     "build": "pnpm -r build",

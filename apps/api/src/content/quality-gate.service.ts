@@ -8,6 +8,7 @@ import {
 } from '@ldp/shared';
 import { LlmService } from '../llm/llm.service';
 import { ContentConfigService } from './content-config.service';
+import { POST_WORDS, checkPost, postBody } from './post-rules';
 import { UsedIndex } from '../pipeline/uniqueness';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -55,6 +56,8 @@ export class QualityGateService {
     pillar?: string;
     used?: UsedIndex;
     regenerationCount?: number;
+    /** True when the story is the author's own project (first person allowed). */
+    ownWork?: boolean;
   }): Promise<AutoDecision & { feedback?: string; scores: QualityScores }> {
     const heuristic = this.heuristicEvaluate(opts);
     let llmFeedback: string | undefined;
@@ -77,6 +80,7 @@ export class QualityGateService {
               post_text: opts.postText.slice(0, 3500),
               source_title: opts.sourceTitle,
               pillar: opts.pillar,
+              source_kind: opts.ownWork ? 'own_work' : 'curated',
             }),
           },
         ],
@@ -103,6 +107,7 @@ export class QualityGateService {
       scores: heuristic.scores,
       qualityScore,
       reasons: heuristic.reasons,
+      violations: heuristic.violations,
       llmReasons,
       llmPass,
       regenerationCount: opts.regenerationCount || 0,
@@ -113,10 +118,10 @@ export class QualityGateService {
 
     return {
       ...decision,
+      // Rule violations first: they are exact, the LLM note is advisory.
       feedback:
-        llmFeedback ||
-        heuristic.feedback ||
-        'Rewrite with a concrete builder lesson, first-person detail, and no clichés or invented metrics.',
+        [heuristic.feedback, llmFeedback].filter(Boolean).join(' ') ||
+        'Rewrite with concrete engineering detail from the source, credited by name. No clichés, no invented metrics or experiences.',
       scores: heuristic.scores,
     };
   }
@@ -150,6 +155,7 @@ export class QualityGateService {
     scores: QualityScores;
     qualityScore: number;
     reasons: string[];
+    violations: string[];
     llmReasons: string[];
     llmPass?: boolean;
     regenerationCount: number;
@@ -157,13 +163,15 @@ export class QualityGateService {
     hook: string;
     postText: string;
   }): AutoDecision {
-    const reasons = [...opts.reasons];
+    const reasons = [...opts.violations, ...opts.reasons];
     const maxRegen = this.config.maxRegenerationAttempts();
     const qThresh = this.config.qualityScoreThreshold();
     const authThresh = this.config.authenticityThreshold();
     const genericMax = this.config.aiGenericnessMax();
 
-    let fails = 0;
+    // Fabricated first person, banned phrases, links and format misses are
+    // not a matter of score: any one of them sends the draft back.
+    let fails = opts.violations.length;
 
     if (opts.scores.authenticity < authThresh) {
       reasons.push(
@@ -243,43 +251,54 @@ export class QualityGateService {
     postText: string;
     hook: string;
     sourceTitle?: string;
+    ownWork?: boolean;
   }): {
     scores: QualityScores;
     reasons: string[];
+    /** Rule breaks that fail the draft regardless of score. */
+    violations: string[];
     feedback?: string;
     decision: AutoDecision['decision'];
   } {
     const text = opts.postText || '';
-    const lower = text.toLowerCase();
-    const hookLower = (opts.hook || '').toLowerCase();
     const reasons: string[] = [];
+    const check = checkPost(opts);
 
-    // Strip unicode bold/italic for phrase checks
-    const plain = fromPretty(lower);
-    const hookPlain = fromPretty(hookLower);
+    // Unicode bold/italic folded to ASCII so styled phrases still match.
+    const plain = `${postBody(opts.hook || '')}\n${postBody(text)}`.toLowerCase();
 
-    let genericHits = 0;
-    for (const p of GENERIC_PHRASES) {
-      if (plain.includes(p) || hookPlain.includes(p)) genericHits += 1;
-    }
+    const genericHits = GENERIC_PHRASES.filter((p) => plain.includes(p)).length;
     const aiGenericness = Math.min(10, genericHits * 2.5);
     if (genericHits) reasons.push(`generic phrases: ${genericHits}`);
 
+    // A percentage is grounded when the post says who measured or reported it.
     const inventedMetrics =
-      /\b\d{2,3}%/.test(text) &&
-      !/\b(benchmark|measured|logged|profiled|traced|from (the )?logs?|in (prod|production))\b/i.test(
-        text,
+      /\b\d{2,3}%/.test(plain) &&
+      !/\b(benchmark\w*|measured|logged|profiled|traced|from (the )?logs?|in (prod|production)|reports?|reported|according to|cites?|claims?)\b/i.test(
+        plain,
       );
     const factualGrounding = inventedMetrics ? 3 : 7.5;
     if (inventedMetrics) reasons.push('suspected ungrounded percentage claim');
 
-    const len = text.length;
-    const readability = len >= 350 && len <= 2400 ? 8 : len < 220 ? 4.5 : 6.5;
+    const onTarget =
+      check.words >= POST_WORDS.targetMin &&
+      check.words <= POST_WORDS.targetMax;
+    const lengthOk =
+      check.words >= POST_WORDS.hardMin && check.words <= POST_WORDS.hardMax;
+    const readability =
+      (onTarget ? 8 : lengthOk ? 6.5 : 4.5) - (check.bullets ? 0 : 1);
     const hasStructure = (text.match(/\n/g) || []).length >= 2;
     const storytelling = hasStructure ? 7.5 : 5.5;
-    const hasVoice = /\b(i|we|my|our|i'm|i’ve|i've)\b/i.test(plain);
-    const authenticity =
-      hasVoice && genericHits === 0 ? 7.8 : hasVoice ? 6.5 : 5.8;
+    const hasVoice = /\b(i|we|my|our|i'm|i've)\b/.test(plain);
+    // First person only reads as authentic when the work is the author's own.
+    // In a post about someone else's work it is an invented anecdote.
+    const authenticity = check.claims.length
+      ? 2.5
+      : genericHits
+        ? 6
+        : opts.ownWork && hasVoice
+          ? 7.8
+          : 7.2;
     const hookScore =
       opts.hook.length >= 12 && opts.hook.length <= 140 && genericHits === 0
         ? 8
@@ -306,14 +325,21 @@ export class QualityGateService {
       factualGrounding,
     };
 
+    const feedback = [
+      ...check.feedback,
+      genericHits || inventedMetrics
+        ? 'Use concrete engineering detail from the source. Drop clichés and percentages the source does not report.'
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+
     return {
       scores,
       reasons,
+      violations: check.violations,
       decision: 'approved',
-      feedback:
-        genericHits || inventedMetrics
-          ? 'Rewrite with concrete engineering detail. Drop clichés and unverified percentages. First-person builder voice.'
-          : undefined,
+      feedback: feedback || undefined,
     };
   }
 
@@ -348,20 +374,15 @@ export class QualityGateService {
   }
 
   private loadPrompt(): string {
-    const p = path.resolve(process.cwd(), '../../prompts/qc-v1.md');
+    const p = path.resolve(process.cwd(), '../../prompts/qc-v2.md');
     try {
       return fs.readFileSync(p, 'utf8');
     } catch {
-      return `Quality-check a LinkedIn post for developers. Be calibrated: a solid builder post should score authenticity 6-8, aiGenericness 1-3. Only fail on clear clichés, invented metrics, or empty marketing. Return JSON { scores, pass, reasons, feedback }.`;
+      return `Quality-check a LinkedIn post for developers. When source_kind is "curated" the post is about someone else's work: fail any invented first-person experience ("we built", "our team", "I tried"). Fail clichés, invented metrics, links, or empty marketing. aiGenericness and repetition: higher is worse. Return JSON { scores, pass, reasons, feedback }.`;
     }
   }
 }
 
 function clamp01to10(n: number): number {
   return Math.max(0, Math.min(10, n));
-}
-
-/** Rough strip of common unicode letter variants used in LinkedIn formatting. */
-function fromPretty(s: string): string {
-  return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 }

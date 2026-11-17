@@ -394,7 +394,9 @@ export class RunsController {
         title: draft.hook || draft.sourceTitle || `Published ${id.slice(0, 8)}`,
         body: draft.postText,
         sourceUrl: draft.sourceLink,
-        source: 'published_by_app',
+        // An explicit "this sounds like me": used by the writer, unlike the
+        // published_by_app rows that every publish adds automatically.
+        source: 'saved_from_draft',
         isActive: true,
       },
     });

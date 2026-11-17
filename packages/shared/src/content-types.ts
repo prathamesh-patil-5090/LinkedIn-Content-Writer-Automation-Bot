@@ -55,15 +55,21 @@ export function normalizeBucket(angle?: string): StoryBucket {
   return 'dev-tool';
 }
 
+/**
+ * Topic authority: auto-picked LinkedIn stories come from two pillars only.
+ * ai-devtools = AI engineering / LLM infrastructure,
+ * js-lib = TypeScript / full-stack systems.
+ */
+export const AUTHORITY_BUCKETS: StoryBucket[] = ['ai-devtools', 'js-lib'];
+
 /** Story buckets the ranker may pick for this content type. */
 export function storyBucketsFor(type: ContentType): StoryBucket[] {
   if (type === 'security-bug') return ['security-bug'];
   if (type === 'js-lib') return ['js-lib'];
   if (type === 'ai-devtools') return ['ai-devtools'];
-  return ['js-lib', 'ai-devtools', 'dev-tool'];
+  return [...AUTHORITY_BUCKETS];
 }
 
-export function fallbackBuckets(type: ContentType): StoryBucket[] {
-  if (type === 'security-bug') return ['js-lib', 'ai-devtools', 'dev-tool'];
-  return ['js-lib', 'ai-devtools', 'dev-tool'];
+export function fallbackBuckets(_type: ContentType): StoryBucket[] {
+  return [...AUTHORITY_BUCKETS];
 }

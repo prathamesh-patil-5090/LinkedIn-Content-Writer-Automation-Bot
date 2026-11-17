@@ -5,7 +5,7 @@ import {
   toBoldSans,
 } from './format';
 import { mergeHashtags } from './hashtags';
-import { polishDraft } from './polish';
+import { findLinks, polishDraft, sourceCredit } from './polish';
 
 describe('linkedin unicode format', () => {
   it('maps bold sans like Typegrow', () => {
@@ -100,15 +100,63 @@ describe('polishDraft', () => {
     expect(out.postText).toMatch(/#BuildInPublic/);
   });
 
-  it('appends a clickable primary source URL', () => {
-    const out = polishDraft({
-      postText: '**Full hook title here.**\n\nBody with a complete lesson.',
-      hook: 'Full hook title here.',
-      hashtags: ['#BuildInPublic'],
-      sourceLink: 'https://dev.to/example/article',
-      sourceTitle: 'Example article',
+  const draft = {
+    postText: [
+      '**Full hook title here.**',
+      'A breakdown by some_user of a cross-framework engine (https://dev.to/some_user/engine).',
+      '- The core has no framework imports.\n- Each adapter stays thin.',
+      'See github.com/some_user/engine for the code.',
+      'Primary source (dev.to):\nhttps://dev.to/some_user/engine',
+      'Which part would you extract first?',
+    ].join('\n\n'),
+    hook: 'Full hook title here.',
+    hashtags: ['#BuildInPublic'],
+    sourceLink: 'https://dev.to/some_user/engine',
+    sourceTitle: 'Building a cross-framework engine',
+  };
+
+  it('publishes no links and credits the source by name instead', () => {
+    const out = polishDraft(draft);
+    expect(findLinks(out.postText)).toEqual([]);
+    expect(out.postText).not.toMatch(/https?:|dev\.to|github\.com/i);
+    expect(out.postText).not.toMatch(/Primary source/i);
+    expect(out.postText).toContain(
+      'Source: "Building a cross-framework engine" by some_user on DEV',
+    );
+    // The credit sits between the closing question and the hashtags.
+    const blocks = out.postText.split('\n\n');
+    expect(blocks[blocks.length - 2]).toMatch(/^Source: /);
+    expect(blocks[blocks.length - 1]).toMatch(/^#/);
+  });
+
+  it('keeps bullets as separate lines', () => {
+    const out = polishDraft(draft);
+    const bullets = out.postText.split('\n').filter((l) => l.startsWith('• '));
+    expect(bullets).toHaveLength(2);
+  });
+
+  it('gives the same post when polished again on approve', () => {
+    const once = polishDraft(draft);
+    const twice = polishDraft({
+      ...draft,
+      postText: once.postText,
+      hashtags: once.hashtags,
     });
-    expect(out.postText).toContain('https://dev.to/example/article');
-    expect(out.postText).toMatch(/Primary source/i);
+    expect(twice.postText).toBe(once.postText);
+  });
+
+  it('adds no credit without a source title', () => {
+    const out = polishDraft({ ...draft, sourceLink: null, sourceTitle: null });
+    expect(out.postText).not.toContain('Source:');
+  });
+
+  it('names the origin for common hosts', () => {
+    expect(sourceCredit('https://github.com/vercel/ai/releases', 'AI SDK 6')).toBe(
+      'Source: "AI SDK 6" in vercel/ai on GitHub',
+    );
+    expect(sourceCredit('https://blog.cloudflare.com/x', 'Workers')).toBe(
+      'Source: "Workers" via Cloudflare',
+    );
+    expect(sourceCredit('not a url', 'Title only')).toBe('Source: "Title only"');
   });
 });

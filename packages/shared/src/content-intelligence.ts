@@ -116,13 +116,26 @@ export const AutoDecisionSchema = z.object({
 });
 export type AutoDecision = z.infer<typeof AutoDecisionSchema>;
 
+/**
+ * Classic LLM giveaways. One hit sends the draft back for a rewrite
+ * (GENERIC_PHRASES below only raise the aiGenericness score).
+ */
+export const BANNED_LLM_PHRASES = [
+  "here's how we did it",
+  'here is how we did it',
+  'the breakthrough came when',
+  'takeaway:',
+  'takeaways:',
+  "in today's fast-paced",
+];
+
 export const GENERIC_PHRASES = [
+  ...BANNED_LLM_PHRASES,
   'excited to announce',
   'game changer',
   'game-changer',
   'revolutionary',
   'unlock the power',
-  "in today's fast-paced",
   'let that sink in',
   'agree?',
   'thoughts?',

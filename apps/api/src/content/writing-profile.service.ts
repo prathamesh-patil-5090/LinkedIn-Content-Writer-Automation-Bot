@@ -97,11 +97,18 @@ export class WritingProfileService {
     return profile;
   }
 
-  formatForPrompt(profile: WritingProfileJson): string {
+  formatForPrompt(
+    profile: WritingProfileJson,
+    opts?: { ownWork?: boolean },
+  ): string {
+    // "first-person lessons" only applies to the author's own projects.
+    const prefer = opts?.ownWork
+      ? profile.prefer
+      : profile.prefer.filter((p) => !/first[- ]person/i.test(p));
     return [
       'Writing profile constraints:',
       `Tone: ${profile.tone.join(', ')}`,
-      `Prefer: ${profile.prefer.join('; ')}`,
+      `Prefer: ${prefer.join('; ')}`,
       `Avoid: ${profile.avoid.join('; ')}`,
       profile.humour ? 'Light humour OK when it serves the point.' : '',
       profile.noEmDash ? 'Never use em/en dashes or spaced hyphen pauses.' : '',

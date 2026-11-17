@@ -84,7 +84,7 @@ export class OpportunityScorerService {
     rationale?: string;
   }> {
     const heuristic = this.heuristicScore(opts);
-    const prompt = this.loadPrompt('event-scorer-v1.md');
+    const prompt = this.loadPrompt('event-scorer-v2.md');
     try {
       const result = await this.llm.chatJson<unknown>({
         model:

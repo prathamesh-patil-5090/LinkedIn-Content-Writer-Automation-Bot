@@ -83,12 +83,21 @@ export function stripNullBytes(value: string) {
 }
 
 /**
+ * Markdown list markers ("- item", "* item") become "• item". Done before the
+ * dash and italic passes, which would otherwise fold a list into one comma
+ * separated line or read "* " as an italic marker.
+ */
+export function normalizeBullets(input: string) {
+  return input.replace(/^[ \t]*[-*•·▪◦][ \t]+(?=\S)/gm, '• ');
+}
+
+/**
  * Strip LLM habits that look bad on LinkedIn:
  * - backticks → **bold** markers (later converted to Unicode)
  * - em/en dashes and spaced hyphen pauses → commas
  */
 export function normalizeLinkedInProse(input: string) {
-  return input
+  return normalizeBullets(input)
     .replace(/`([^`\n]+)`/g, '**$1**')
     .replace(/\s*[\u2014\u2013]\s*/g, ', ')
     .replace(/\s+-\s+/g, ', ')
