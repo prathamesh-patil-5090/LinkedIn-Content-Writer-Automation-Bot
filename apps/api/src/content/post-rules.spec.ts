@@ -1,4 +1,5 @@
 import { toBoldSans } from '../linkedin/format';
+import { polishDraft } from '../linkedin/polish';
 import {
   CURATED_HOOK,
   CURATED_POST,
@@ -91,6 +92,31 @@ describe('checkPost', () => {
       hook: CURATED_HOOK,
     });
     expect(check.violations).toEqual([]);
+  });
+
+  // The gate sees the post after polishDraft: Unicode bold hook, italic
+  // closing question, "•" bullets, source credit and hashtags.
+  const polish = (postText: string, hook: string) =>
+    polishDraft({
+      postText,
+      hook,
+      hashtags: ['#TypeScript'],
+      category: 'js-lib',
+      sourceLink: 'https://dev.to/some_user/engine',
+      sourceTitle: 'How we built a cross-framework engine',
+    });
+
+  it('judges the polished post the same way as the raw draft', () => {
+    const good = polish(CURATED_POST, CURATED_HOOK);
+    expect(good.postText).toContain('Source: "How we built');
+    const check = checkPost(good);
+    expect(check.violations).toEqual([]);
+    expect(check.bullets).toBe(4);
+    expect(check.words).toBe(checkPost({ postText: CURATED_POST }).words);
+
+    const bad = checkPost(polish(FABRICATED_POST, FABRICATED_HOOK));
+    expect(bad.violations.join(' | ')).toMatch(/fabricated first-person/);
+    expect(bad.violations.join(' | ')).toMatch(/banned phrases/);
   });
 
   it('fails the fabricated first-person rewrite', () => {
